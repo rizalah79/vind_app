@@ -1,0 +1,25 @@
+{
+    "name":  "vind-app",
+    "version":  "0.0.0",
+    "private":  true,
+    "workspaces":  [
+                       "packages/*"
+                   ],
+    "engines":  {
+                    "node":  "\u003e=22.12.0 \u003c23"
+                },
+    "packageManager":  "npm@9.7.2",
+    "scripts":  {
+                    "db:validate":  "npm run prisma:validate --workspace @vind/database",
+                    "db:format":  "npm run prisma:format --workspace @vind/database",
+                    "db:generate":  "npm run prisma:generate --workspace @vind/database",
+                    "db:build":  "npm run build --workspace @vind/database",
+                    "db:check":  "npm run check --workspace @vind/database",
+                    "db:migrate":  "npm run migrate --workspace @vind/database",
+                    "db:migrate:status":  "npm run migrate:status --workspace @vind/database",
+                    "db:introspect":  "npm run prisma:pull --workspace @vind/database",
+                    "db:seed:smk":  "npm run seed:smk --workspace @vind/database",
+                    "db:seed:smk:verify":  "npm run seed:smk:verify --workspace @vind/database",
+                    "db:seed:smk:cleanup":  "npm run seed:smk:cleanup --workspace @vind/database --"
+                }
+}

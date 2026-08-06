@@ -1,0 +1,36 @@
+name: vind_app
+
+services:
+  postgres:
+    image: postgis/postgis:18-3.6
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT}:5432"
+
+    volumes:
+      - vind_pgdata:/var/lib/postgresql
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+    networks:
+      - vind_internal
+
+volumes:
+  vind_pgdata:
+    name: vind_pgdata
+
+networks:
+  vind_internal:
+    name: vind_internal
+    driver: bridge

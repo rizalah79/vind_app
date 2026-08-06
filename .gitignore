@@ -1,0 +1,58 @@
+.env
+.env.*
+!.env.example
+
+*.log
+backups/
+tmp/
+!.env.database.example
+node_modules/
+dist/
+packages/database/src/generated/
+packages/database/.env
+!.env.database.example
+!packages/database/.env.example
+# BEGIN REPO-DEC-001 FOUNDATION BASELINE
+
+# Secrets and local environments
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build, test, and generated output
+dist/
+**/dist/
+build/
+**/build/
+coverage/
+**/coverage/
+packages/database/src/generated/
+packages/database/generated/
+**/.prisma/
+
+# Local backup and debugging artifacts
+*.bak
+*.before-*
+docker-compose.before-*.yml
+*.log
+
+# Local PostgreSQL data and volumes
+.pgdata/
+pgdata/
+postgres-data/
+data/postgres/
+
+# Operating-system artifacts
+.DS_Store
+Thumbs.db
+
+# END REPO-DEC-001 FOUNDATION BASELINE
+# Canonical environment templates tracked by REPO-DEC-001
+!/.env.example
+!/.env.database.example
+!/packages/database/.env.example

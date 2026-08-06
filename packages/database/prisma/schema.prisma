@@ -1,0 +1,708 @@
+generator client {
+  provider        = "prisma-client"
+  output          = "../src/generated/prisma"
+  previewFeatures = ["partialIndexes"]
+  moduleFormat    = "esm"
+  runtime         = "nodejs"
+}
+
+datasource db {
+  provider = "postgresql"
+  schemas  = ["access", "audit", "geo", "identity", "integration", "listing", "organization", "party", "privacy", "security", "staging"]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model capabilities {
+  code              String              @id
+  domain_code       String
+  action_code       String
+  description       String
+  is_sensitive      Boolean             @default(false)
+  is_active         Boolean             @default(true)
+  created_at        DateTime            @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at        DateTime            @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  role_capabilities role_capabilities[]
+
+  @@schema("access")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model role_capabilities {
+  role_code       String
+  capability_code String
+  effect          String       @default("ALLOW")
+  created_at      DateTime     @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  created_by      String       @default(dbgenerated("SESSION_USER"))
+  capabilities    capabilities @relation(fields: [capability_code], references: [code])
+  roles           roles        @relation(fields: [role_code], references: [code])
+
+  @@id([role_code, capability_code])
+  @@index([capability_code], map: "role_capabilities_capability_idx")
+  @@schema("access")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model roles {
+  code               String               @id
+  display_name       String
+  description        String?
+  role_scope         String
+  is_system          Boolean              @default(true)
+  is_active          Boolean              @default(true)
+  created_at         DateTime             @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at         DateTime             @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  role_capabilities  role_capabilities[]
+  scoped_assignments scoped_assignments[]
+
+  @@schema("access")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model audit_events {
+  id                    BigInt            @id @default(autoincrement())
+  event_type            String
+  action_code           String
+  actor_account_key     String?
+  actor_person_key      String?
+  acting_membership_key String?
+  acting_assignment_key String?
+  target_schema         String
+  target_relation       String
+  target_key            String
+  reason_code           String?
+  correlation_id        String?
+  request_id            String?
+  before_state          Json?
+  after_state           Json?
+  metadata              Json              @default("{}")
+  classification_code   String
+  retention_class_code  String            @default("SEC")
+  occurred_at           DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  recorded_at           DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  retention_classes     retention_classes @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([correlation_id], map: "audit_events_correlation_idx", where: raw("(correlation_id IS NOT NULL)"))
+  @@index([target_schema, target_relation, target_key, occurred_at(sort: Desc)], map: "audit_events_target_idx")
+  @@schema("audit")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model idempotency_keys {
+  scope                String
+  idempotency_key      String
+  request_hash_sha256  String
+  actor_key            String?
+  correlation_id       String?
+  status               String    @default("PROCESSING")
+  response_status_code Int?
+  response_body        Json?
+  locked_until         DateTime? @db.Timestamptz(6)
+  expires_at           DateTime  @db.Timestamptz(6)
+  completed_at         DateTime? @db.Timestamptz(6)
+  created_at           DateTime  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at           DateTime  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  @@id([scope, idempotency_key])
+  @@index([status, expires_at], map: "idempotency_expiry_idx")
+  @@schema("integration")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model outbox_events {
+  id                BigInt    @id @default(autoincrement())
+  event_key         String    @unique
+  aggregate_schema  String
+  aggregate_type    String
+  aggregate_key     String
+  aggregate_version BigInt
+  event_type        String
+  event_version     Int       @default(1)
+  payload           Json
+  headers           Json      @default("{}")
+  correlation_id    String?
+  causation_id      String?
+  status            String    @default("PENDING")
+  attempt_count     Int       @default(0)
+  available_at      DateTime  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  occurred_at       DateTime  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  published_at      DateTime? @db.Timestamptz(6)
+  last_error        String?
+  created_at        DateTime  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  @@index([aggregate_schema, aggregate_type, aggregate_key, aggregate_version], map: "outbox_aggregate_idx")
+  @@index([available_at, id], map: "outbox_dispatch_idx", where: raw("(status = ANY (ARRAY['PENDING'::text, 'FAILED'::text]))"))
+  @@schema("integration")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This table contains exclusion constraints and requires additional setup for migrations. Visit https://pris.ly/d/exclusion-constraints for more info.
+model retention_assignments {
+  id                        BigInt                    @id @default(autoincrement())
+  target_schema             String
+  target_relation           String
+  aggregate_type            String                    @default("*")
+  policy_version_id         BigInt
+  effective_from            DateTime                  @db.Timestamptz(6)
+  effective_to              DateTime?                 @db.Timestamptz(6)
+  is_active                 Boolean                   @default(true)
+  created_at                DateTime                  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  created_by                String                    @default(dbgenerated("SESSION_USER"))
+  retention_policy_versions retention_policy_versions @relation(fields: [policy_version_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@schema("privacy")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model retention_classes {
+  code                      String                      @id
+  display_name              String
+  description               String?
+  is_active                 Boolean                     @default(true)
+  created_at                DateTime                    @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at                DateTime                    @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  memberships               memberships[]
+  pic_assignments           pic_assignments[]
+  scoped_assignments        scoped_assignments[]
+  audit_events              audit_events[]
+  locations                 locations[]
+  regions                   regions[]
+  accounts                  accounts[]
+  identity_links            identity_links[]
+  channels                  channels[]
+  organizations             organizations[]
+  workspaces                workspaces[]
+  consumer_profiles         consumer_profiles[]
+  contact_points            contact_points[]
+  persons                   persons[]
+  retention_policy_versions retention_policy_versions[]
+  data_access_logs          data_access_logs[]
+  security_events           security_events[]
+
+  @@schema("privacy")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This table contains exclusion constraints and requires additional setup for migrations. Visit https://pris.ly/d/exclusion-constraints for more info.
+model retention_policy_versions {
+  id                    BigInt                  @id @default(autoincrement())
+  retention_class_code  String
+  policy_version        Int
+  jurisdiction_code     String                  @default("GLOBAL")
+  disposal_action       String
+  retention_seconds     BigInt?
+  grace_seconds         BigInt?
+  legal_hold_supported  Boolean                 @default(true)
+  status                String                  @default("DRAFT")
+  effective_from        DateTime                @db.Timestamptz(6)
+  effective_to          DateTime?               @db.Timestamptz(6)
+  policy_metadata       Json                    @default("{}")
+  created_at            DateTime                @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  created_by            String                  @default(dbgenerated("SESSION_USER"))
+  retention_assignments retention_assignments[]
+  retention_classes     retention_classes       @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([retention_class_code, jurisdiction_code, policy_version], map: "retention_policy_version_unique")
+  @@schema("privacy")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model data_access_logs {
+  id                    BigInt            @id @default(autoincrement())
+  actor_account_key     String?
+  actor_person_key      String?
+  acting_assignment_key String?
+  purpose_code          String
+  access_type           String
+  target_schema         String
+  target_relation       String
+  target_key            String?
+  fields_accessed       String[]          @default([])
+  result_count          Int?
+  reason_code           String?
+  correlation_id        String?
+  request_id            String?
+  source_ip             String?           @db.Inet
+  retention_class_code  String            @default("SEC")
+  occurred_at           DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  recorded_at           DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  retention_classes     retention_classes @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([target_schema, target_relation, target_key, occurred_at(sort: Desc)], map: "data_access_target_idx")
+  @@schema("security")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model security_events {
+  id                   BigInt            @id @default(autoincrement())
+  event_type           String
+  severity             String
+  actor_account_key    String?
+  actor_person_key     String?
+  subject_key          String?
+  correlation_id       String?
+  request_id           String?
+  source_ip            String?           @db.Inet
+  user_agent           String?
+  details              Json              @default("{}")
+  retention_class_code String            @default("SEC")
+  occurred_at          DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  recorded_at          DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  retention_classes    retention_classes @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([correlation_id], map: "security_events_correlation_idx", where: raw("(correlation_id IS NOT NULL)"))
+  @@index([subject_key, occurred_at(sort: Desc)], map: "security_events_subject_idx", where: raw("(subject_key IS NOT NULL)"))
+  @@schema("security")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model import_batches {
+  id                          BigInt                   @id @default(autoincrement())
+  batch_key                   String                   @unique
+  dataset_profile_code        String
+  environment_code            String
+  status                      String                   @default("REGISTERED")
+  initiated_by                String                   @default(dbgenerated("SESSION_USER"))
+  correlation_id              String?
+  expected_workbook_count     Int?
+  source_manifest_hash_sha256 String?
+  schema_contract_version     String
+  dictionary_version          String
+  started_at                  DateTime?                @db.Timestamptz(6)
+  completed_at                DateTime?                @db.Timestamptz(6)
+  created_at                  DateTime                 @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  metadata                    Json                     @default("{}")
+  import_reconciliations      import_reconciliations[]
+  import_workbooks            import_workbooks[]
+
+  @@index([status, created_at(sort: Desc)], map: "import_batches_status_idx")
+  @@schema("staging")
+}
+
+model import_reconciliations {
+  id               BigInt         @id @default(autoincrement())
+  batch_id         BigInt
+  scope_type       String
+  scope_key        String
+  metric_code      String
+  expected_numeric Decimal?       @db.Decimal
+  actual_numeric   Decimal?       @db.Decimal
+  expected_text    String?
+  actual_text      String?
+  matched          Boolean
+  details          Json           @default("{}")
+  created_at       DateTime       @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  import_batches   import_batches @relation(fields: [batch_id], references: [id], onUpdate: NoAction)
+
+  @@unique([batch_id, scope_type, scope_key, metric_code], map: "import_reconciliation_unique")
+  @@index([batch_id], map: "import_reconciliation_mismatch_idx", where: raw("(matched = false)"))
+  @@schema("staging")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model import_row_errors {
+  id                       BigInt        @id @default(autoincrement())
+  sheet_id                 BigInt
+  source_row_number        Int
+  rule_code                String
+  severity                 String
+  column_name              String?
+  value_fingerprint_sha256 String?
+  redacted_preview         String?
+  message                  String
+  details                  Json          @default("{}")
+  created_at               DateTime      @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  import_sheets            import_sheets @relation(fields: [sheet_id], references: [id], onUpdate: NoAction)
+
+  @@index([sheet_id, source_row_number, severity], map: "import_row_errors_sheet_idx")
+  @@schema("staging")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model import_sheets {
+  id                BigInt              @id @default(autoincrement())
+  workbook_id       BigInt
+  sheet_name        String
+  import_sequence   Int
+  csv_sha256        String
+  source_rows       Int                 @default(0)
+  accepted_rows     Int                 @default(0)
+  rejected_rows     Int                 @default(0)
+  quarantined_rows  Int                 @default(0)
+  inserted_rows     Int                 @default(0)
+  updated_rows      Int                 @default(0)
+  unchanged_rows    Int                 @default(0)
+  conflict_rows     Int                 @default(0)
+  status            String              @default("REGISTERED")
+  created_at        DateTime            @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  import_row_errors import_row_errors[]
+  import_workbooks  import_workbooks    @relation(fields: [workbook_id], references: [id], onUpdate: NoAction)
+
+  @@unique([workbook_id, sheet_name], map: "import_sheet_unique")
+  @@schema("staging")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model import_workbooks {
+  id                   BigInt          @id @default(autoincrement())
+  batch_id             BigInt
+  workbook_name        String
+  workbook_version     String
+  file_size_bytes      BigInt
+  sha256               String
+  expected_sheet_count Int?
+  actual_sheet_count   Int?
+  status               String          @default("REGISTERED")
+  created_at           DateTime        @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  import_sheets        import_sheets[]
+  import_batches       import_batches  @relation(fields: [batch_id], references: [id], onUpdate: NoAction)
+
+  @@unique([batch_id, workbook_name], map: "import_workbook_unique")
+  @@schema("staging")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model memberships {
+  id                                                String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  seed_key                                          String               @unique
+  person_id                                         String               @db.Uuid
+  organization_id                                   String               @db.Uuid
+  workspace_id                                      String?              @db.Uuid
+  status                                            String               @default("INVITED")
+  effective_from                                    DateTime             @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  effective_to                                      DateTime?            @db.Timestamptz(6)
+  invited_by_person_id                              String?              @db.Uuid
+  accepted_at                                       DateTime?            @db.Timestamptz(6)
+  retention_class_code                              String               @default("SEC")
+  created_at                                        DateTime             @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at                                        DateTime             @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  persons_memberships_invited_by_person_idTopersons persons?             @relation("memberships_invited_by_person_idTopersons", fields: [invited_by_person_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  organizations                                     organizations        @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  persons_memberships_person_idTopersons            persons              @relation("memberships_person_idTopersons", fields: [person_id], references: [id], onUpdate: NoAction)
+  retention_classes                                 retention_classes    @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+  workspaces                                        workspaces?          @relation(fields: [workspace_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  scoped_assignments                                scoped_assignments[]
+
+  @@unique([person_id, organization_id], map: "memberships_active_org_unique", where: raw("((workspace_id IS NULL) AND (status = 'ACTIVE'::text) AND (effective_to IS NULL))"))
+  @@unique([person_id, organization_id, workspace_id], map: "memberships_active_workspace_unique", where: raw("((workspace_id IS NOT NULL) AND (status = 'ACTIVE'::text) AND (effective_to IS NULL))"))
+  @@index([organization_id, status], map: "memberships_organization_idx")
+  @@index([person_id, status], map: "memberships_person_idx")
+  @@schema("access")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This table contains exclusion constraints and requires additional setup for migrations. Visit https://pris.ly/d/exclusion-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model pic_assignments {
+  id                   String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  seed_key             String             @unique
+  scoped_assignment_id String             @db.Uuid
+  responsibility_code  String
+  target_type          String
+  organization_id      String?            @db.Uuid
+  workspace_id         String?            @db.Uuid
+  location_id          String?            @db.Uuid
+  status               String             @default("ACTIVE")
+  is_primary           Boolean            @default(false)
+  effective_from       DateTime           @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  effective_to         DateTime?          @db.Timestamptz(6)
+  retention_class_code String             @default("SEC")
+  created_at           DateTime           @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at           DateTime           @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  locations            locations?         @relation(fields: [location_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  organizations        organizations?     @relation(fields: [organization_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  retention_classes    retention_classes  @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+  scoped_assignments   scoped_assignments @relation(fields: [scoped_assignment_id], references: [id], onUpdate: NoAction)
+  workspaces           workspaces?        @relation(fields: [workspace_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@schema("access")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This table contains exclusion constraints and requires additional setup for migrations. Visit https://pris.ly/d/exclusion-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model scoped_assignments {
+  id                   String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  seed_key             String            @unique
+  membership_id        String            @db.Uuid
+  role_code            String
+  scope_type           String
+  organization_id      String            @db.Uuid
+  workspace_id         String?           @db.Uuid
+  status               String            @default("DRAFT")
+  effective_from       DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  effective_to         DateTime?         @db.Timestamptz(6)
+  reason_code          String?
+  retention_class_code String            @default("SEC")
+  created_at           DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at           DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  pic_assignments      pic_assignments[]
+  memberships          memberships       @relation(fields: [membership_id], references: [id], onUpdate: NoAction)
+  organizations        organizations     @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  retention_classes    retention_classes @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+  roles                roles             @relation(fields: [role_code], references: [code])
+  workspaces           workspaces?       @relation(fields: [workspace_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([membership_id, status], map: "scoped_assignments_membership_idx")
+  @@schema("access")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model locations {
+  id                     String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  seed_key               String                    @unique
+  organization_id        String?                   @db.Uuid
+  region_id              String?                   @db.Uuid
+  location_type          String
+  display_name           String
+  address_line_1         String?
+  address_line_2         String?
+  postal_code            String?
+  visibility             String                    @default("PRIVATE")
+  precise_point          Unsupported("geography")?
+  public_point           Unsupported("geography")?
+  coordinate_source_type String?
+  source_url             String?
+  source_license         String?
+  source_retrieved_at    DateTime?                 @db.Timestamptz(6)
+  source_checksum_sha256 String?
+  source_metadata        Json                      @default("{}")
+  status                 String                    @default("ACTIVE")
+  is_synthetic           Boolean                   @default(false)
+  retention_class_code   String                    @default("OPS")
+  created_at             DateTime                  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at             DateTime                  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  pic_assignments        pic_assignments[]
+  organizations          organizations?            @relation(fields: [organization_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  regions                regions?                  @relation(fields: [region_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  retention_classes      retention_classes         @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+  workspaces             workspaces[]
+
+  @@index([organization_id], map: "locations_organization_idx")
+  @@index([precise_point], map: "locations_precise_point_gist", type: Gist, where: raw("(precise_point IS NOT NULL)"))
+  @@index([public_point], map: "locations_public_point_gist", type: Gist, where: raw("(public_point IS NOT NULL)"))
+  @@index([region_id], map: "locations_region_idx")
+  @@schema("geo")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model regions {
+  id                     String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  seed_key               String                   @unique
+  parent_id              String?                  @db.Uuid
+  region_type            String
+  country_code           String                   @default("ID")
+  code                   String
+  display_name           String
+  boundary               Unsupported("geometry")?
+  centroid               Unsupported("geometry")?
+  source_name            String?
+  source_url             String?
+  source_license         String?
+  source_retrieved_at    DateTime?                @db.Timestamptz(6)
+  source_checksum_sha256 String?
+  source_metadata        Json                     @default("{}")
+  status                 String                   @default("ACTIVE")
+  retention_class_code   String                   @default("REF")
+  created_at             DateTime                 @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at             DateTime                 @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  locations              locations[]
+  regions                regions?                 @relation("regionsToregions", fields: [parent_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  other_regions          regions[]                @relation("regionsToregions")
+  retention_classes      retention_classes        @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([country_code, region_type, code], map: "regions_business_key_unique")
+  @@index([boundary], map: "regions_boundary_gist", type: Gist, where: raw("(boundary IS NOT NULL)"))
+  @@index([parent_id], map: "regions_parent_idx")
+  @@schema("geo")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model accounts {
+  id                    String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  seed_key              String            @unique
+  account_type          String            @default("HUMAN")
+  status                String            @default("PENDING")
+  last_authenticated_at DateTime?         @db.Timestamptz(6)
+  retention_class_code  String            @default("SEC")
+  created_at            DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at            DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  retention_classes     retention_classes @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+  identity_links        identity_links?
+
+  @@schema("identity")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model identity_links {
+  id                   String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  seed_key             String            @unique
+  account_id           String            @unique(map: "identity_links_one_primary_active", where: raw("((is_primary = true) AND (status = 'ACTIVE'::text))")) @db.Uuid
+  person_id            String            @db.Uuid
+  issuer               String
+  subject              String
+  assurance_level      String            @default("BASIC")
+  status               String            @default("ACTIVE")
+  is_primary           Boolean           @default(false)
+  linked_at            DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  revoked_at           DateTime?         @db.Timestamptz(6)
+  retention_class_code String            @default("SEC")
+  created_at           DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at           DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  accounts             accounts          @relation(fields: [account_id], references: [id], onUpdate: NoAction)
+  persons              persons           @relation(fields: [person_id], references: [id], onUpdate: NoAction)
+  retention_classes    retention_classes @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([account_id, person_id, issuer], map: "identity_links_account_person_issuer_unique")
+  @@unique([issuer, subject], map: "identity_links_external_subject_unique")
+  @@index([person_id], map: "identity_links_person_idx")
+  @@schema("identity")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model channels {
+  id                    String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  seed_key              String              @unique
+  code                  String              @unique
+  display_name          String
+  status                String              @default("ACTIVE")
+  trusted_host_patterns String[]            @default([])
+  trusted_client_ids    String[]            @default([])
+  retention_class_code  String              @default("REF")
+  created_at            DateTime            @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at            DateTime            @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  retention_classes     retention_classes   @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+  consumer_profiles     consumer_profiles[]
+
+  @@schema("listing")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model organizations {
+  id                        String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  seed_key                  String               @unique
+  legal_name                String
+  display_name              String
+  organization_type         String
+  status                    String               @default("DRAFT")
+  verification_status       String               @default("UNVERIFIED")
+  registration_country_code String               @default("ID")
+  registration_number       String?
+  is_synthetic              Boolean              @default(false)
+  retention_class_code      String               @default("OPS")
+  created_at                DateTime             @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at                DateTime             @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  memberships               memberships[]
+  pic_assignments           pic_assignments[]
+  scoped_assignments        scoped_assignments[]
+  locations                 locations[]
+  retention_classes         retention_classes    @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+  workspaces                workspaces?
+
+  @@unique([registration_country_code, registration_number], map: "organizations_registration_unique", where: raw("(registration_number IS NOT NULL)"))
+  @@schema("organization")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model workspaces {
+  id                   String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  seed_key             String               @unique
+  organization_id      String               @unique(map: "workspaces_one_default_active", where: raw("((is_default = true) AND (status = 'ACTIVE'::text))")) @db.Uuid
+  primary_location_id  String?              @db.Uuid
+  code                 String
+  display_name         String
+  status               String               @default("ACTIVE")
+  is_default           Boolean              @default(false)
+  retention_class_code String               @default("OPS")
+  created_at           DateTime             @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at           DateTime             @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  memberships          memberships[]
+  pic_assignments      pic_assignments[]
+  scoped_assignments   scoped_assignments[]
+  organizations        organizations        @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  locations            locations?           @relation(fields: [primary_location_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  retention_classes    retention_classes    @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([organization_id, code], map: "workspaces_org_code_unique")
+  @@schema("organization")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model consumer_profiles {
+  id                     String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  seed_key               String            @unique
+  person_id              String            @unique @db.Uuid
+  preferred_channel_code String?
+  status                 String            @default("ACTIVE")
+  preferences            Json              @default("{}")
+  is_synthetic           Boolean           @default(false)
+  retention_class_code   String            @default("PRIV")
+  created_at             DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at             DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  persons                persons           @relation(fields: [person_id], references: [id], onUpdate: NoAction)
+  channels               channels?         @relation(fields: [preferred_channel_code], references: [code], onDelete: Restrict)
+  retention_classes      retention_classes @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+
+  @@schema("party")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model contact_points {
+  id                   String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  seed_key             String            @unique
+  person_id            String            @db.Uuid
+  contact_type         String
+  label                String?
+  value                String
+  normalized_value     String
+  verification_status  String            @default("UNVERIFIED")
+  status               String            @default("ACTIVE")
+  is_primary           Boolean           @default(false)
+  is_synthetic         Boolean           @default(false)
+  contactable          Boolean           @default(true)
+  valid_from           DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  valid_to             DateTime?         @db.Timestamptz(6)
+  retention_class_code String            @default("PRIV")
+  created_at           DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at           DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  persons              persons           @relation(fields: [person_id], references: [id], onUpdate: NoAction)
+  retention_classes    retention_classes @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([person_id, contact_type], map: "contact_points_one_primary_active", where: raw("((is_primary = true) AND (status = 'ACTIVE'::text))"))
+  @@unique([person_id, contact_type, normalized_value], map: "contact_points_person_value_unique")
+  @@index([contact_type, normalized_value], map: "contact_points_normalized_idx")
+  @@schema("party")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model persons {
+  id                                                    String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  seed_key                                              String             @unique
+  display_name                                          String
+  preferred_name                                        String?
+  legal_name                                            String?
+  status                                                String             @default("ACTIVE")
+  locale_code                                           String             @default("id-ID")
+  timezone_name                                         String?
+  is_synthetic                                          Boolean            @default(false)
+  contactable                                           Boolean            @default(true)
+  retention_class_code                                  String             @default("PRIV")
+  created_at                                            DateTime           @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at                                            DateTime           @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  memberships_memberships_invited_by_person_idTopersons memberships[]      @relation("memberships_invited_by_person_idTopersons")
+  memberships_memberships_person_idTopersons            memberships[]      @relation("memberships_person_idTopersons")
+  identity_links                                        identity_links[]
+  consumer_profiles                                     consumer_profiles?
+  contact_points                                        contact_points[]
+  retention_classes                                     retention_classes  @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+
+  @@schema("party")
+}
