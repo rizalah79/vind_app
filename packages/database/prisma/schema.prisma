@@ -424,10 +424,10 @@ model pic_assignments {
 model scoped_assignments {
   id                   String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   seed_key             String            @unique
-  membership_id        String            @db.Uuid
+  membership_id        String?           @db.Uuid
   role_code            String
   scope_type           String
-  organization_id      String            @db.Uuid
+  organization_id      String?           @db.Uuid
   workspace_id         String?           @db.Uuid
   status               String            @default("DRAFT")
   effective_from       DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
@@ -436,14 +436,17 @@ model scoped_assignments {
   retention_class_code String            @default("SEC")
   created_at           DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
   updated_at           DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  person_id            String?           @db.Uuid
   pic_assignments      pic_assignments[]
-  memberships          memberships       @relation(fields: [membership_id], references: [id], onUpdate: NoAction)
-  organizations        organizations     @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
+  memberships          memberships?      @relation(fields: [membership_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  organizations        organizations?    @relation(fields: [organization_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  persons              persons?          @relation(fields: [person_id], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "scoped_assignments_person_fk")
   retention_classes    retention_classes @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
   roles                roles             @relation(fields: [role_code], references: [code])
   workspaces           workspaces?       @relation(fields: [workspace_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
   @@index([membership_id, status], map: "scoped_assignments_membership_idx")
+  @@index([person_id, status], map: "scoped_assignments_person_idx", where: raw("(person_id IS NOT NULL)"))
   @@schema("access")
 }
 
@@ -684,25 +687,26 @@ model contact_points {
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
 model persons {
-  id                                                    String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  seed_key                                              String             @unique
+  id                                                    String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  seed_key                                              String               @unique
   display_name                                          String
   preferred_name                                        String?
   legal_name                                            String?
-  status                                                String             @default("ACTIVE")
-  locale_code                                           String             @default("id-ID")
+  status                                                String               @default("ACTIVE")
+  locale_code                                           String               @default("id-ID")
   timezone_name                                         String?
-  is_synthetic                                          Boolean            @default(false)
-  contactable                                           Boolean            @default(true)
-  retention_class_code                                  String             @default("PRIV")
-  created_at                                            DateTime           @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
-  updated_at                                            DateTime           @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
-  memberships_memberships_invited_by_person_idTopersons memberships[]      @relation("memberships_invited_by_person_idTopersons")
-  memberships_memberships_person_idTopersons            memberships[]      @relation("memberships_person_idTopersons")
+  is_synthetic                                          Boolean              @default(false)
+  contactable                                           Boolean              @default(true)
+  retention_class_code                                  String               @default("PRIV")
+  created_at                                            DateTime             @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at                                            DateTime             @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  memberships_memberships_invited_by_person_idTopersons memberships[]        @relation("memberships_invited_by_person_idTopersons")
+  memberships_memberships_person_idTopersons            memberships[]        @relation("memberships_person_idTopersons")
+  scoped_assignments                                    scoped_assignments[]
   identity_links                                        identity_links[]
   consumer_profiles                                     consumer_profiles?
   contact_points                                        contact_points[]
-  retention_classes                                     retention_classes  @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+  retention_classes                                     retention_classes    @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
 
   @@schema("party")
 }
