@@ -202,6 +202,17 @@ BEGIN
 
     SELECT count(*)
     INTO v_count
+    FROM access.roles
+    WHERE code IN ('MODERATOR', 'OPERATIONS_ADMIN')
+      AND is_active = true;
+
+    IF v_count <> 2 THEN
+        RAISE WARNING 'A01: MODERATOR and OPERATIONS_ADMIN must exist and be active';
+        v_failures := v_failures + 1;
+    END IF;
+
+    SELECT count(*)
+    INTO v_count
     FROM access.role_capabilities
     WHERE (role_code, capability_code, effect) IN (
         ('OWNER', 'provider.status.transition', 'ALLOW'),
@@ -209,11 +220,14 @@ BEGIN
         ('OWNER', 'listing.publication.transition', 'ALLOW'),
         ('ADMIN', 'provider.status.transition', 'ALLOW'),
         ('ADMIN', 'listing.publication.transition', 'ALLOW'),
-        ('CONTENT_MANAGER', 'listing.publication.transition', 'ALLOW')
+        ('CONTENT_MANAGER', 'listing.publication.transition', 'ALLOW'),
+        ('MODERATOR', 'verification.evidence.read', 'ALLOW'),
+        ('OPERATIONS_ADMIN', 'verification.evidence.read', 'ALLOW'),
+        ('OPERATIONS_ADMIN', 'provider.status.transition', 'ALLOW')
     );
 
-    IF v_count <> 6 THEN
-        RAISE WARNING 'A01: locked least-privilege provider role mappings are incomplete';
+    IF v_count <> 9 THEN
+        RAISE WARNING 'A01: locked least-privilege role mappings are incomplete';
         v_failures := v_failures + 1;
     END IF;
 
@@ -224,6 +238,8 @@ BEGIN
             'OWNER',
             'ADMIN',
             'CONTENT_MANAGER',
+            'MODERATOR',
+            'OPERATIONS_ADMIN',
             'OPERATIONS_STAFF',
             'ACCOUNTING'
         )
@@ -252,9 +268,20 @@ BEGIN
               (rc.role_code = 'CONTENT_MANAGER'
                AND rc.capability_code = 'listing.publication.transition'
                AND rc.effect = 'ALLOW')
+              OR
+              (rc.role_code = 'MODERATOR'
+               AND rc.capability_code = 'verification.evidence.read'
+               AND rc.effect = 'ALLOW')
+              OR
+              (rc.role_code = 'OPERATIONS_ADMIN'
+               AND rc.capability_code IN (
+                   'verification.evidence.read',
+                   'provider.status.transition'
+               )
+               AND rc.effect = 'ALLOW')
           )
     ) THEN
-        RAISE WARNING 'A01: forbidden provider-facing capability mapping exists';
+        RAISE WARNING 'A01: forbidden sensitive capability mapping exists';
         v_failures := v_failures + 1;
     END IF;
 
