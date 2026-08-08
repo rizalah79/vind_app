@@ -8,20 +8,21 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  schemas  = ["access", "audit", "geo", "identity", "integration", "listing", "organization", "party", "privacy", "security", "staging"]
+  schemas  = ["access", "audit", "configuration", "geo", "identity", "integration", "listing", "organization", "party", "privacy", "security", "staging"]
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model capabilities {
-  code              String              @id
-  domain_code       String
-  action_code       String
-  description       String
-  is_sensitive      Boolean             @default(false)
-  is_active         Boolean             @default(true)
-  created_at        DateTime            @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
-  updated_at        DateTime            @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
-  role_capabilities role_capabilities[]
+  code                     String                     @id
+  domain_code              String
+  action_code              String
+  description              String
+  is_sensitive             Boolean                    @default(false)
+  is_active                Boolean                    @default(true)
+  created_at               DateTime                   @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at               DateTime                   @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  role_capabilities        role_capabilities[]
+  service_principal_grants service_principal_grants[]
 
   @@schema("access")
 }
@@ -43,17 +44,20 @@ model role_capabilities {
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model roles {
-  code               String               @id
-  display_name       String
-  description        String?
-  role_scope         String
-  is_system          Boolean              @default(true)
-  is_active          Boolean              @default(true)
-  created_at         DateTime             @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
-  updated_at         DateTime             @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
-  role_capabilities  role_capabilities[]
-  scoped_assignments scoped_assignments[]
+  code                 String                 @id
+  display_name         String
+  description          String?
+  role_scope           String
+  is_system            Boolean                @default(true)
+  is_active            Boolean                @default(true)
+  created_at           DateTime               @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at           DateTime               @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  authority_plane      String
+  platform_assignments platform_assignments[]
+  role_capabilities    role_capabilities[]
+  scoped_assignments   scoped_assignments[]
 
+  @@index([authority_plane, is_active], map: "roles_authority_plane_active_idx")
   @@schema("access")
 }
 
@@ -162,8 +166,11 @@ model retention_classes {
   updated_at                DateTime                    @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
   memberships               memberships[]
   pic_assignments           pic_assignments[]
+  platform_assignments      platform_assignments[]
   scoped_assignments        scoped_assignments[]
+  service_principal_grants  service_principal_grants[]
   audit_events              audit_events[]
+  settings                  settings[]
   locations                 locations[]
   regions                   regions[]
   accounts                  accounts[]
@@ -174,7 +181,9 @@ model retention_classes {
   consumer_profiles         consumer_profiles[]
   contact_points            contact_points[]
   persons                   persons[]
+  consent_receipts          consent_receipts[]
   retention_policy_versions retention_policy_versions[]
+  subject_requests          subject_requests[]
   data_access_logs          data_access_logs[]
   security_events           security_events[]
 
@@ -271,6 +280,9 @@ model import_batches {
   completed_at                DateTime?                @db.Timestamptz(6)
   created_at                  DateTime                 @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
   metadata                    Json                     @default("{}")
+  accounts                    accounts[]
+  organizations               organizations[]
+  persons                     persons[]
   import_reconciliations      import_reconciliations[]
   import_workbooks            import_workbooks[]
 
@@ -422,28 +434,35 @@ model pic_assignments {
 /// This table contains exclusion constraints and requires additional setup for migrations. Visit https://pris.ly/d/exclusion-constraints for more info.
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
 model scoped_assignments {
-  id                   String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  seed_key             String            @unique
-  membership_id        String            @db.Uuid
-  role_code            String
-  scope_type           String
-  organization_id      String            @db.Uuid
-  workspace_id         String?           @db.Uuid
-  status               String            @default("DRAFT")
-  effective_from       DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
-  effective_to         DateTime?         @db.Timestamptz(6)
-  reason_code          String?
-  retention_class_code String            @default("SEC")
-  created_at           DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
-  updated_at           DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
-  pic_assignments      pic_assignments[]
-  memberships          memberships       @relation(fields: [membership_id], references: [id], onUpdate: NoAction)
-  organizations        organizations     @relation(fields: [organization_id], references: [id], onUpdate: NoAction)
-  retention_classes    retention_classes @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
-  roles                roles             @relation(fields: [role_code], references: [code])
-  workspaces           workspaces?       @relation(fields: [workspace_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  id                                                    String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  seed_key                                              String            @unique
+  membership_id                                         String?           @db.Uuid
+  role_code                                             String
+  scope_type                                            String
+  organization_id                                       String?           @db.Uuid
+  workspace_id                                          String?           @db.Uuid
+  status                                                String            @default("DRAFT")
+  effective_from                                        DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  effective_to                                          DateTime?         @db.Timestamptz(6)
+  reason_code                                           String?
+  retention_class_code                                  String            @default("SEC")
+  created_at                                            DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at                                            DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  subject_person_id                                     String            @db.Uuid
+  scope_person_id                                       String?           @db.Uuid
+  pic_assignments                                       pic_assignments[]
+  memberships                                           memberships?      @relation(fields: [membership_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  organizations                                         organizations?    @relation(fields: [organization_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  retention_classes                                     retention_classes @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+  roles                                                 roles             @relation(fields: [role_code], references: [code])
+  persons_scoped_assignments_scope_person_idTopersons   persons?          @relation("scoped_assignments_scope_person_idTopersons", fields: [scope_person_id], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "scoped_assignments_scope_person_fk")
+  persons_scoped_assignments_subject_person_idTopersons persons           @relation("scoped_assignments_subject_person_idTopersons", fields: [subject_person_id], references: [id], onUpdate: NoAction, map: "scoped_assignments_subject_person_fk")
+  workspaces                                            workspaces?       @relation(fields: [workspace_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
   @@index([membership_id, status], map: "scoped_assignments_membership_idx")
+  @@index([organization_id, status], map: "scoped_assignments_organization_status_idx", where: raw("(organization_id IS NOT NULL)"))
+  @@index([subject_person_id, status], map: "scoped_assignments_subject_person_idx")
+  @@index([workspace_id, status], map: "scoped_assignments_workspace_status_idx", where: raw("(workspace_id IS NOT NULL)"))
   @@schema("access")
 }
 
@@ -488,29 +507,32 @@ model locations {
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model regions {
-  id                     String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  seed_key               String                   @unique
-  parent_id              String?                  @db.Uuid
-  region_type            String
-  country_code           String                   @default("ID")
-  code                   String
-  display_name           String
-  boundary               Unsupported("geometry")?
-  centroid               Unsupported("geometry")?
-  source_name            String?
-  source_url             String?
-  source_license         String?
-  source_retrieved_at    DateTime?                @db.Timestamptz(6)
-  source_checksum_sha256 String?
-  source_metadata        Json                     @default("{}")
-  status                 String                   @default("ACTIVE")
-  retention_class_code   String                   @default("REF")
-  created_at             DateTime                 @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
-  updated_at             DateTime                 @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
-  locations              locations[]
-  regions                regions?                 @relation("regionsToregions", fields: [parent_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  other_regions          regions[]                @relation("regionsToregions")
-  retention_classes      retention_classes        @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+  id                       String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  seed_key                 String                     @unique
+  parent_id                String?                    @db.Uuid
+  region_type              String
+  country_code             String                     @default("ID")
+  code                     String
+  display_name             String
+  boundary                 Unsupported("geometry")?
+  centroid                 Unsupported("geometry")?
+  source_name              String?
+  source_url               String?
+  source_license           String?
+  source_retrieved_at      DateTime?                  @db.Timestamptz(6)
+  source_checksum_sha256   String?
+  source_metadata          Json                       @default("{}")
+  status                   String                     @default("ACTIVE")
+  retention_class_code     String                     @default("REF")
+  created_at               DateTime                   @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at               DateTime                   @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  platform_assignments     platform_assignments[]
+  service_principal_grants service_principal_grants[]
+  settings                 settings[]
+  locations                locations[]
+  regions                  regions?                   @relation("regionsToregions", fields: [parent_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  other_regions            regions[]                  @relation("regionsToregions")
+  retention_classes        retention_classes          @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([country_code, region_type, code], map: "regions_business_key_unique")
   @@index([boundary], map: "regions_boundary_gist", type: Gist, where: raw("(boundary IS NOT NULL)"))
@@ -521,17 +543,23 @@ model regions {
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
 model accounts {
-  id                    String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  seed_key              String            @unique
-  account_type          String            @default("HUMAN")
-  status                String            @default("PENDING")
-  last_authenticated_at DateTime?         @db.Timestamptz(6)
-  retention_class_code  String            @default("SEC")
-  created_at            DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
-  updated_at            DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
-  retention_classes     retention_classes @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
-  identity_links        identity_links?
+  id                       String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  seed_key                 String                     @unique
+  account_type             String                     @default("HUMAN")
+  status                   String                     @default("PENDING")
+  last_authenticated_at    DateTime?                  @db.Timestamptz(6)
+  retention_class_code     String                     @default("SEC")
+  created_at               DateTime                   @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at               DateTime                   @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  data_origin_code         String
+  source_import_batch_id   BigInt?
+  source_reference         String?
+  service_principal_grants service_principal_grants[]
+  retention_classes        retention_classes          @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+  import_batches           import_batches?            @relation(fields: [source_import_batch_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  identity_links           identity_links?
 
+  @@index([data_origin_code], map: "accounts_data_origin_idx")
   @@schema("identity")
 }
 
@@ -564,18 +592,23 @@ model identity_links {
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model channels {
-  id                    String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  seed_key              String              @unique
-  code                  String              @unique
-  display_name          String
-  status                String              @default("ACTIVE")
-  trusted_host_patterns String[]            @default([])
-  trusted_client_ids    String[]            @default([])
-  retention_class_code  String              @default("REF")
-  created_at            DateTime            @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
-  updated_at            DateTime            @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
-  retention_classes     retention_classes   @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
-  consumer_profiles     consumer_profiles[]
+  id                       String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  seed_key                 String                     @unique
+  code                     String                     @unique
+  display_name             String
+  status                   String                     @default("ACTIVE")
+  trusted_host_patterns    String[]                   @default([])
+  trusted_client_ids       String[]                   @default([])
+  retention_class_code     String                     @default("REF")
+  created_at               DateTime                   @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at               DateTime                   @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  platform_assignments     platform_assignments[]
+  service_principal_grants service_principal_grants[]
+  settings                 settings[]
+  retention_classes        retention_classes          @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+  consumer_profiles        consumer_profiles[]
+  consent_receipts         consent_receipts[]
+  subject_requests         subject_requests[]
 
   @@schema("listing")
 }
@@ -596,14 +629,19 @@ model organizations {
   retention_class_code      String               @default("OPS")
   created_at                DateTime             @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
   updated_at                DateTime             @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  data_origin_code          String
+  source_import_batch_id    BigInt?
+  source_reference          String?
   memberships               memberships[]
   pic_assignments           pic_assignments[]
   scoped_assignments        scoped_assignments[]
   locations                 locations[]
   retention_classes         retention_classes    @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+  import_batches            import_batches?      @relation(fields: [source_import_batch_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
   workspaces                workspaces?
 
   @@unique([registration_country_code, registration_number], map: "organizations_registration_unique", where: raw("(registration_number IS NOT NULL)"))
+  @@index([data_origin_code], map: "organizations_data_origin_idx")
   @@schema("organization")
 }
 
@@ -684,25 +722,183 @@ model contact_points {
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
 model persons {
-  id                                                    String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  seed_key                                              String             @unique
-  display_name                                          String
-  preferred_name                                        String?
-  legal_name                                            String?
-  status                                                String             @default("ACTIVE")
-  locale_code                                           String             @default("id-ID")
-  timezone_name                                         String?
-  is_synthetic                                          Boolean            @default(false)
-  contactable                                           Boolean            @default(true)
-  retention_class_code                                  String             @default("PRIV")
-  created_at                                            DateTime           @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
-  updated_at                                            DateTime           @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
-  memberships_memberships_invited_by_person_idTopersons memberships[]      @relation("memberships_invited_by_person_idTopersons")
-  memberships_memberships_person_idTopersons            memberships[]      @relation("memberships_person_idTopersons")
-  identity_links                                        identity_links[]
-  consumer_profiles                                     consumer_profiles?
-  contact_points                                        contact_points[]
-  retention_classes                                     retention_classes  @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+  id                                                                       String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  seed_key                                                                 String                 @unique
+  display_name                                                             String
+  preferred_name                                                           String?
+  legal_name                                                               String?
+  status                                                                   String                 @default("ACTIVE")
+  locale_code                                                              String                 @default("id-ID")
+  timezone_name                                                            String?
+  is_synthetic                                                             Boolean                @default(false)
+  contactable                                                              Boolean                @default(true)
+  retention_class_code                                                     String                 @default("PRIV")
+  created_at                                                               DateTime               @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at                                                               DateTime               @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  data_origin_code                                                         String
+  source_import_batch_id                                                   BigInt?
+  source_reference                                                         String?
+  memberships_memberships_invited_by_person_idTopersons                    memberships[]          @relation("memberships_invited_by_person_idTopersons")
+  memberships_memberships_person_idTopersons                               memberships[]          @relation("memberships_person_idTopersons")
+  platform_assignments_platform_assignments_approved_by_person_idTopersons platform_assignments[] @relation("platform_assignments_approved_by_person_idTopersons")
+  platform_assignments_platform_assignments_subject_person_idTopersons     platform_assignments[] @relation("platform_assignments_subject_person_idTopersons")
+  scoped_assignments_scoped_assignments_scope_person_idTopersons           scoped_assignments[]   @relation("scoped_assignments_scope_person_idTopersons")
+  scoped_assignments_scoped_assignments_subject_person_idTopersons         scoped_assignments[]   @relation("scoped_assignments_subject_person_idTopersons")
+  identity_links                                                           identity_links[]
+  consumer_profiles                                                        consumer_profiles?
+  contact_points                                                           contact_points[]
+  retention_classes                                                        retention_classes      @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+  import_batches                                                           import_batches?        @relation(fields: [source_import_batch_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  consent_receipts                                                         consent_receipts[]
+  subject_requests                                                         subject_requests[]
 
+  @@index([data_origin_code], map: "persons_data_origin_idx")
   @@schema("party")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This table contains exclusion constraints and requires additional setup for migrations. Visit https://pris.ly/d/exclusion-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model platform_assignments {
+  id                                                          String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  assignment_key                                              String            @unique
+  subject_person_id                                           String            @db.Uuid
+  role_code                                                   String
+  assignment_mode                                             String            @default("ROUTINE")
+  status                                                      String            @default("DRAFT")
+  channel_id                                                  String?           @db.Uuid
+  region_id                                                   String?           @db.Uuid
+  effective_from                                              DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  effective_to                                                DateTime?         @db.Timestamptz(6)
+  reason_code                                                 String
+  approved_by_person_id                                       String?           @db.Uuid
+  approval_reference                                          String?
+  retention_class_code                                        String            @default("SEC")
+  created_at                                                  DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at                                                  DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  persons_platform_assignments_approved_by_person_idTopersons persons?          @relation("platform_assignments_approved_by_person_idTopersons", fields: [approved_by_person_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  channels                                                    channels?         @relation(fields: [channel_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  regions                                                     regions?          @relation(fields: [region_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  retention_classes                                           retention_classes @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+  roles                                                       roles             @relation(fields: [role_code], references: [code])
+  persons_platform_assignments_subject_person_idTopersons     persons           @relation("platform_assignments_subject_person_idTopersons", fields: [subject_person_id], references: [id], onUpdate: NoAction)
+
+  @@index([channel_id, status], map: "platform_assignments_channel_idx", where: raw("(channel_id IS NOT NULL)"))
+  @@index([region_id, status], map: "platform_assignments_region_idx", where: raw("(region_id IS NOT NULL)"))
+  @@index([role_code, status], map: "platform_assignments_role_idx")
+  @@index([subject_person_id, status], map: "platform_assignments_subject_idx")
+  @@schema("access")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This table contains exclusion constraints and requires additional setup for migrations. Visit https://pris.ly/d/exclusion-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model service_principal_grants {
+  id                   String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  grant_key            String            @unique
+  subject_account_id   String            @db.Uuid
+  capability_code      String
+  status               String            @default("DRAFT")
+  purpose_code         String
+  channel_id           String?           @db.Uuid
+  region_id            String?           @db.Uuid
+  effective_from       DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  effective_to         DateTime?         @db.Timestamptz(6)
+  reason_code          String
+  retention_class_code String            @default("SEC")
+  created_at           DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at           DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  capabilities         capabilities      @relation(fields: [capability_code], references: [code])
+  channels             channels?         @relation(fields: [channel_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  regions              regions?          @relation(fields: [region_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  retention_classes    retention_classes @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+  accounts             accounts          @relation(fields: [subject_account_id], references: [id], onUpdate: NoAction)
+
+  @@index([subject_account_id, status], map: "service_principal_grants_account_idx")
+  @@index([capability_code, status], map: "service_principal_grants_capability_idx")
+  @@schema("access")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This table contains exclusion constraints and requires additional setup for migrations. Visit https://pris.ly/d/exclusion-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model settings {
+  id                   String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  setting_key          String
+  scope_type           String
+  channel_id           String?           @db.Uuid
+  region_id            String?           @db.Uuid
+  version              Int
+  value_type           String
+  value_json           Json
+  status               String            @default("DRAFT")
+  effective_from       DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  effective_to         DateTime?         @db.Timestamptz(6)
+  retention_class_code String            @default("REF")
+  created_at           DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at           DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  channels             channels?         @relation(fields: [channel_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  regions              regions?          @relation(fields: [region_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  retention_classes    retention_classes @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([setting_key, channel_id, version], map: "settings_channel_version_unique", where: raw("(scope_type = 'CHANNEL'::text)"))
+  @@unique([setting_key, version], map: "settings_global_version_unique", where: raw("(scope_type = 'GLOBAL'::text)"))
+  @@unique([setting_key, region_id, version], map: "settings_region_version_unique", where: raw("(scope_type = 'REGION'::text)"))
+  @@index([setting_key, status, effective_from, effective_to], map: "settings_effective_lookup_idx")
+  @@schema("configuration")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model consent_receipts {
+  id                     String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  receipt_key            String            @unique
+  person_id              String            @db.Uuid
+  purpose_code           String
+  policy_version         String
+  consent_action         String
+  channel_id             String?           @db.Uuid
+  grant_effective_from   DateTime?         @db.Timestamptz(6)
+  grant_effective_until  DateTime?         @db.Timestamptz(6)
+  revokes_receipt_id     String?           @unique(map: "consent_receipts_one_withdrawal_per_grant", where: raw("(consent_action = 'WITHDRAWN'::text)")) @db.Uuid
+  source_reference       String?
+  occurred_at            DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  retention_class_code   String            @default("PRIV")
+  created_at             DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  channels               channels?         @relation(fields: [channel_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  persons                persons           @relation(fields: [person_id], references: [id], onUpdate: NoAction)
+  retention_classes      retention_classes @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+  consent_receipts       consent_receipts? @relation("consent_receiptsToconsent_receipts", fields: [revokes_receipt_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  other_consent_receipts consent_receipts? @relation("consent_receiptsToconsent_receipts")
+
+  @@index([person_id, occurred_at(sort: Desc)], map: "consent_receipts_person_idx")
+  @@schema("privacy")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model subject_requests {
+  id                   String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  request_key          String            @unique
+  person_id            String            @db.Uuid
+  request_type         String
+  status               String            @default("SUBMITTED")
+  channel_id           String?           @db.Uuid
+  request_details      Json              @default("{}")
+  submitted_at         DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  verified_at          DateTime?         @db.Timestamptz(6)
+  due_at               DateTime?         @db.Timestamptz(6)
+  completed_at         DateTime?         @db.Timestamptz(6)
+  resolution_code      String?
+  resolution_details   Json              @default("{}")
+  retention_class_code String            @default("PRIV")
+  created_at           DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at           DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  channels             channels?         @relation(fields: [channel_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  persons              persons           @relation(fields: [person_id], references: [id], onUpdate: NoAction)
+  retention_classes    retention_classes @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([status, due_at], map: "subject_requests_due_idx", where: raw("((status <> ALL (ARRAY['REJECTED'::text, 'COMPLETED'::text, 'CANCELLED'::text])) AND (due_at IS NOT NULL))"))
+  @@index([person_id, status, submitted_at(sort: Desc)], map: "subject_requests_person_idx")
+  @@schema("privacy")
 }

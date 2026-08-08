@@ -63,9 +63,10 @@ function validateLocalConnectionUrl(
     );
   }
 
-  if (parsed.port !== "5433") {
+  const effectivePort = parsed.port || "5432";
+  if (effectivePort !== "5432") {
     throw new Error(
-      `${label} must use port 5433. Received: ${parsed.port}`
+      `${label} must use port 5432. Received: ${parsed.port || "default (5432)"}`
     );
   }
 
@@ -152,15 +153,16 @@ async function assertRequiredMigrations(
     FROM public.vind_schema_migrations
     WHERE migration_name IN (
       '20260805093000_platform_control_core',
-      '20260805210000_identity_organization_access'
+      '20260805210000_identity_organization_access',
+      '20260808140000_foundation_access_closure_s1'
     )
     ORDER BY migration_name
   `);
 
-  if (result.rowCount !== 2) {
+  if (result.rowCount !== 3) {
     throw new Error(
-      "Required Platform Control Core and Slice 1 migrations " +
-      "are not both applied."
+      "Required Platform Control Core, Slice 1, and S1 Access Closure " +
+      "migrations are not all applied."
     );
   }
 }
@@ -389,6 +391,54 @@ async function verifySyntheticInvariants(
     0,
     "synthetic location violations"
   );
+
+  const personOriginViolations = await queryCount(client, `
+    SELECT count(*)::text AS count
+    FROM party.persons
+    WHERE seed_key LIKE 'smk:s1:%'
+      AND (
+        data_origin_code <> 'SYNTHETIC_DEMO'
+        OR source_reference IS NULL
+      )
+  `);
+
+  assertEqual(
+    personOriginViolations,
+    0,
+    "synthetic person provenance violations"
+  );
+
+  const organizationOriginViolations = await queryCount(client, `
+    SELECT count(*)::text AS count
+    FROM organization.organizations
+    WHERE seed_key LIKE 'smk:s1:%'
+      AND (
+        data_origin_code <> 'SYNTHETIC_DEMO'
+        OR source_reference IS NULL
+      )
+  `);
+
+  assertEqual(
+    organizationOriginViolations,
+    0,
+    "synthetic organization provenance violations"
+  );
+
+  const accountOriginViolations = await queryCount(client, `
+    SELECT count(*)::text AS count
+    FROM identity.accounts
+    WHERE seed_key LIKE 'smk:s1:%'
+      AND (
+        data_origin_code <> 'SYNTHETIC_DEMO'
+        OR source_reference IS NULL
+      )
+  `);
+
+  assertEqual(
+    accountOriginViolations,
+    0,
+    "synthetic account provenance violations"
+  );
 }
 
 async function loadSeedIds(
@@ -606,7 +656,7 @@ async function verifyRuntimeRls(
         FROM access.scoped_assignments
         WHERE seed_key LIKE 'smk:s1:%'
       `),
-      2,
+      1,
       "RLS owner Alpha scoped assignments"
     );
 
@@ -616,7 +666,7 @@ async function verifyRuntimeRls(
         FROM access.pic_assignments
         WHERE seed_key LIKE 'smk:s1:%'
       `),
-      2,
+      1,
       "RLS owner Alpha PIC assignments"
     );
 
