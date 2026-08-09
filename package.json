@@ -20,6 +20,10 @@
                     "db:introspect":  "npm run prisma:pull --workspace @vind/database",
                     "db:seed:smk":  "npm run seed:smk --workspace @vind/database",
                     "db:seed:smk:verify":  "npm run seed:smk:verify --workspace @vind/database",
-                    "db:seed:smk:cleanup":  "npm run seed:smk:cleanup --workspace @vind/database --"
+                    "db:seed:smk:cleanup":  "npm run seed:smk:cleanup --workspace @vind/database --",
+                    "db:seed:dec021":  "npm run seed:dec021 --workspace @vind/database",
+                    "db:seed:dec021:verify":  "npm run seed:dec021:verify --workspace @vind/database",
+                    "db:test:dec021": "npm run test:dec021 --workspace @vind/database",
+                    "test": "npm run db:check && npm run db:test:dec021"
                 }
 }

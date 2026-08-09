@@ -26,7 +26,11 @@
                     "prisma:pull":  "prisma db pull",
                     "seed:smk":  "tsx src/seed-smk.ts apply",
                     "seed:smk:verify":  "tsx src/seed-smk.ts verify",
-                    "seed:smk:cleanup":  "tsx src/seed-smk.ts cleanup"
+                    "seed:smk:cleanup":  "tsx src/seed-smk.ts cleanup --",
+                    "seed:dec021":  "tsx src/seed-dec021.ts apply",
+                    "seed:dec021:verify":  "tsx src/seed-dec021.ts verify",
+                    "test:dec021": "tsx src/test-dec021-harness.ts",
+                    "test": "npm run check && npm run test:dec021"
                 },
     "dependencies":  {
                          "@prisma/adapter-pg":  "7.9.1",

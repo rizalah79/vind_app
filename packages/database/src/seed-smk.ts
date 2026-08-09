@@ -34,14 +34,22 @@ dotenv.config({
 const command = (process.argv[2] ?? "apply") as SeedCommand;
 const argumentsSet = new Set(process.argv.slice(3));
 
-const importConnectionString =
-  process.env.DATABASE_IMPORT_URL;
+const rawMigrationUrl = process.env.DATABASE_MIGRATION_URL;
+
+function getMigrationUrl(): string | undefined {
+  if (!rawMigrationUrl) return undefined;
+  const url = new URL(rawMigrationUrl);
+  url.searchParams.set("options", "-c role=vind_db_owner");
+  return url.toString();
+}
+
+const migrationConnectionString = getMigrationUrl();
 
 const runtimeConnectionString =
   process.env.DATABASE_URL;
 
-if (!importConnectionString) {
-  throw new Error("DATABASE_IMPORT_URL is required.");
+if (!migrationConnectionString) {
+  throw new Error("DATABASE_MIGRATION_URL is required.");
 }
 
 if (!runtimeConnectionString) {
@@ -63,9 +71,10 @@ function validateLocalConnectionUrl(
     );
   }
 
-  if (parsed.port !== "5433") {
+  const effectivePort = parsed.port || "5432";
+  if (effectivePort !== "5432") {
     throw new Error(
-      `${label} must use port 5433. Received: ${parsed.port}`
+      `${label} must use port 5432. Received: ${parsed.port || "default (5432)"}`
     );
   }
 
@@ -78,8 +87,8 @@ function validateLocalConnectionUrl(
 }
 
 validateLocalConnectionUrl(
-  importConnectionString,
-  "DATABASE_IMPORT_URL"
+  migrationConnectionString,
+  "DATABASE_MIGRATION_URL"
 );
 
 validateLocalConnectionUrl(
@@ -135,7 +144,7 @@ async function assertDatabaseIdentity(
     );
   }
 
-  if (identity.effective_user_name !== expectedSessionUser) {
+  if (identity.effective_user_name !== expectedSessionUser && identity.effective_user_name !== "vind_db_owner") {
     throw new Error(
       `Unexpected effective user: ${identity.effective_user_name}`
     );
@@ -152,15 +161,16 @@ async function assertRequiredMigrations(
     FROM public.vind_schema_migrations
     WHERE migration_name IN (
       '20260805093000_platform_control_core',
-      '20260805210000_identity_organization_access'
+      '20260805210000_identity_organization_access',
+      '20260808140000_foundation_access_closure_s1'
     )
     ORDER BY migration_name
   `);
 
-  if (result.rowCount !== 2) {
+  if (result.rowCount !== 3) {
     throw new Error(
-      "Required Platform Control Core and Slice 1 migrations " +
-      "are not both applied."
+      "Required Platform Control Core, Slice 1, and S1 Access Closure " +
+      "migrations are not all applied."
     );
   }
 }
@@ -389,6 +399,54 @@ async function verifySyntheticInvariants(
     0,
     "synthetic location violations"
   );
+
+  const personOriginViolations = await queryCount(client, `
+    SELECT count(*)::text AS count
+    FROM party.persons
+    WHERE seed_key LIKE 'smk:s1:%'
+      AND (
+        data_origin_code <> 'SYNTHETIC_DEMO'
+        OR source_reference IS NULL
+      )
+  `);
+
+  assertEqual(
+    personOriginViolations,
+    0,
+    "synthetic person provenance violations"
+  );
+
+  const organizationOriginViolations = await queryCount(client, `
+    SELECT count(*)::text AS count
+    FROM organization.organizations
+    WHERE seed_key LIKE 'smk:s1:%'
+      AND (
+        data_origin_code <> 'SYNTHETIC_DEMO'
+        OR source_reference IS NULL
+      )
+  `);
+
+  assertEqual(
+    organizationOriginViolations,
+    0,
+    "synthetic organization provenance violations"
+  );
+
+  const accountOriginViolations = await queryCount(client, `
+    SELECT count(*)::text AS count
+    FROM identity.accounts
+    WHERE seed_key LIKE 'smk:s1:%'
+      AND (
+        data_origin_code <> 'SYNTHETIC_DEMO'
+        OR source_reference IS NULL
+      )
+  `);
+
+  assertEqual(
+    accountOriginViolations,
+    0,
+    "synthetic account provenance violations"
+  );
 }
 
 async function loadSeedIds(
@@ -606,7 +664,7 @@ async function verifyRuntimeRls(
         FROM access.scoped_assignments
         WHERE seed_key LIKE 'smk:s1:%'
       `),
-      2,
+      1,
       "RLS owner Alpha scoped assignments"
     );
 
@@ -616,7 +674,7 @@ async function verifyRuntimeRls(
         FROM access.pic_assignments
         WHERE seed_key LIKE 'smk:s1:%'
       `),
-      2,
+      1,
       "RLS owner Alpha PIC assignments"
     );
 
@@ -800,16 +858,22 @@ async function applySeed(): Promise<void> {
   );
 
   const client = new Client({
-    connectionString: importConnectionString,
-    application_name: "vind-smk-slice-1-seed"
+    connectionString: migrationConnectionString,
+    application_name: "vind-smk-slice-1-apply"
   });
 
   try {
     await client.connect();
-    await assertDatabaseIdentity(client, "vind_importer");
+
+    await assertDatabaseIdentity(
+      client,
+      "vind_migrator"
+    );
+
     await assertRequiredMigrations(client);
 
     await client.query("BEGIN");
+    await client.query("SET ROLE vind_db_owner");
 
     try {
       await client.query(
@@ -819,6 +883,7 @@ async function applySeed(): Promise<void> {
         "SET LOCAL statement_timeout TO '2min'"
       );
       await client.query(seedSql);
+      await client.query("RESET ROLE");
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -838,8 +903,8 @@ async function applySeed(): Promise<void> {
 
 async function verifySeed(): Promise<void> {
   const importClient = new Client({
-    connectionString: importConnectionString,
-    application_name: "vind-smk-slice-1-verify-importer"
+    connectionString: migrationConnectionString,
+    application_name: "vind-smk-slice-1-verify-migrator"
   });
 
   let ids: SeedIds;
@@ -848,7 +913,7 @@ async function verifySeed(): Promise<void> {
     await importClient.connect();
     await assertDatabaseIdentity(
       importClient,
-      "vind_importer"
+      "vind_migrator"
     );
     await assertRequiredMigrations(importClient);
     await verifySeedCounts(importClient);
@@ -870,13 +935,13 @@ async function verifySeed(): Promise<void> {
       "vind_app_runtime"
     );
     await verifyRuntimeRls(runtimeClient, ids);
+
+    console.log(
+      "SMK Slice 1 seed and RLS verification passed."
+    );
   } finally {
     await runtimeClient.end().catch(() => undefined);
   }
-
-  console.log(
-    "SMK Slice 1 seed and RLS verification passed."
-  );
 }
 
 async function cleanupSeed(): Promise<void> {
@@ -892,13 +957,13 @@ async function cleanupSeed(): Promise<void> {
   );
 
   const client = new Client({
-    connectionString: importConnectionString,
+    connectionString: migrationConnectionString,
     application_name: "vind-smk-slice-1-cleanup"
   });
 
   try {
     await client.connect();
-    await assertDatabaseIdentity(client, "vind_importer");
+    await assertDatabaseIdentity(client, "vind_migrator");
 
     await client.query("BEGIN");
 

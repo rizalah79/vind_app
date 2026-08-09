@@ -14,7 +14,7 @@ Purpose:
 Safety rules:
 
 1. The runner only accepts database `vind_app_dev`.
-2. The runner only accepts localhost on port `5433`.
+2. The runner only accepts localhost on port `5432`.
 3. Apply and cleanup use `vind_importer`.
 4. Runtime RLS verification uses `vind_app_runtime`.
 5. All owned fixture keys use prefix `smk:s1:`.

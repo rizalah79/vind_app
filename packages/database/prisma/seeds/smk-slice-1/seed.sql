@@ -18,7 +18,9 @@ INSERT INTO organization.organizations (
     verification_status,
     registration_country_code,
     registration_number,
-    is_synthetic
+    is_synthetic,
+    data_origin_code,
+    source_reference
 )
 VALUES
     (
@@ -30,7 +32,9 @@ VALUES
         'UNVERIFIED',
         'ID',
         NULL,
-        true
+        true,
+        'SYNTHETIC_DEMO',
+        'smk:s1'
     ),
     (
         'smk:s1:org:beta',
@@ -41,7 +45,9 @@ VALUES
         'UNVERIFIED',
         'ID',
         NULL,
-        true
+        true,
+        'SYNTHETIC_DEMO',
+        'smk:s1'
     )
 ON CONFLICT (seed_key) DO UPDATE
 SET
@@ -244,7 +250,9 @@ INSERT INTO party.persons (
     locale_code,
     timezone_name,
     is_synthetic,
-    contactable
+    contactable,
+    data_origin_code,
+    source_reference
 )
 VALUES
     (
@@ -256,7 +264,9 @@ VALUES
         'id-ID',
         'Asia/Jakarta',
         true,
-        false
+        false,
+        'SYNTHETIC_DEMO',
+        'smk:s1'
     ),
     (
         'smk:s1:person:operations_alpha',
@@ -267,7 +277,9 @@ VALUES
         'id-ID',
         'Asia/Jakarta',
         true,
-        false
+        false,
+        'SYNTHETIC_DEMO',
+        'smk:s1'
     ),
     (
         'smk:s1:person:owner_beta',
@@ -278,7 +290,9 @@ VALUES
         'id-ID',
         'Asia/Jakarta',
         true,
-        false
+        false,
+        'SYNTHETIC_DEMO',
+        'smk:s1'
     ),
     (
         'smk:s1:person:consumer',
@@ -289,7 +303,9 @@ VALUES
         'id-ID',
         'Asia/Jakarta',
         true,
-        false
+        false,
+        'SYNTHETIC_DEMO',
+        'smk:s1'
     )
 ON CONFLICT (seed_key) DO UPDATE
 SET
@@ -456,32 +472,42 @@ INSERT INTO identity.accounts (
     seed_key,
     account_type,
     status,
-    last_authenticated_at
+    last_authenticated_at,
+    data_origin_code,
+    source_reference
 )
 VALUES
     (
         'smk:s1:account:owner_alpha',
         'HUMAN',
         'ACTIVE',
-        NULL
+        NULL,
+        'SYNTHETIC_DEMO',
+        'smk:s1'
     ),
     (
         'smk:s1:account:operations_alpha',
         'HUMAN',
         'ACTIVE',
-        NULL
+        NULL,
+        'SYNTHETIC_DEMO',
+        'smk:s1'
     ),
     (
         'smk:s1:account:owner_beta',
         'HUMAN',
         'ACTIVE',
-        NULL
+        NULL,
+        'SYNTHETIC_DEMO',
+        'smk:s1'
     ),
     (
         'smk:s1:account:consumer',
         'HUMAN',
         'ACTIVE',
-        NULL
+        NULL,
+        'SYNTHETIC_DEMO',
+        'smk:s1'
     )
 ON CONFLICT (seed_key) DO UPDATE
 SET
@@ -647,6 +673,7 @@ SET
 
 INSERT INTO access.scoped_assignments (
     seed_key,
+    subject_person_id,
     membership_id,
     role_code,
     scope_type,
@@ -659,6 +686,7 @@ INSERT INTO access.scoped_assignments (
 )
 SELECT
     'smk:s1:assignment:owner_alpha',
+    m.person_id,
     m.id,
     'OWNER',
     'ORGANIZATION',
@@ -677,6 +705,7 @@ UNION ALL
 
 SELECT
     'smk:s1:assignment:operations_alpha',
+    m.person_id,
     m.id,
     'OPERATIONS_STAFF',
     'WORKSPACE',
@@ -697,6 +726,7 @@ UNION ALL
 
 SELECT
     'smk:s1:assignment:owner_beta',
+    m.person_id,
     m.id,
     'OWNER',
     'ORGANIZATION',
@@ -713,6 +743,7 @@ WHERE m.seed_key = 'smk:s1:membership:owner_beta'
 
 ON CONFLICT (seed_key) DO UPDATE
 SET
+    subject_person_id = EXCLUDED.subject_person_id,
     membership_id = EXCLUDED.membership_id,
     role_code = EXCLUDED.role_code,
     scope_type = EXCLUDED.scope_type,
