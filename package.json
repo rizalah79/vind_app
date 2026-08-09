@@ -24,6 +24,8 @@
                     "db:seed:dec021":  "npm run seed:dec021 --workspace @vind/database",
                     "db:seed:dec021:verify":  "npm run seed:dec021:verify --workspace @vind/database",
                     "db:test:dec021": "npm run test:dec021 --workspace @vind/database",
+                    "media:fixtures:bootstrap": "node scripts/bootstrap-synthetic-demo-media.mjs",
+                    "media:fixtures:verify": "node scripts/verify-synthetic-demo-media.mjs",
                     "test": "npm run db:check && npm run db:test:dec021"
                 }
 }

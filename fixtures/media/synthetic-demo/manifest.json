@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "purpose": "Deterministic synthetic demo media fixtures for Vindzam\u2013Vindloka local development and frontend/API integration.",
+  "canonical_repo_fixture_root": "fixtures/media/synthetic-demo",
+  "canonical_local_runtime_root": "uploads",
+  "assets": [
+    {
+      "seed_key": "smk:s2:media:xenia_front",
+      "file_name": "xenia_front.jpg",
+      "fixture_file": "fixtures/media/synthetic-demo/xenia_front.jpg",
+      "storage_path": "uploads/xenia_front.jpg",
+      "mime_type": "image/jpeg",
+      "file_size_bytes": 54111,
+      "checksum_sha256": "60497f9fecf066680463f9ab6b8f72e1a68a314d660db9d70a89eb5fe12a3514",
+      "status": "ACTIVE",
+      "alt_text": "Compact MPV exterior, synthetic demo",
+      "data_origin_code": "SYNTHETIC_DEMO"
+    },
+    {
+      "seed_key": "smk:s2:media:xenia_interior",
+      "file_name": "xenia_interior.jpg",
+      "fixture_file": "fixtures/media/synthetic-demo/xenia_interior.jpg",
+      "storage_path": "uploads/xenia_interior.jpg",
+      "mime_type": "image/jpeg",
+      "file_size_bytes": 52229,
+      "checksum_sha256": "51f96bdefa2563af48c0756f58900c5fedd9e58b63a8e22fddb8a733a0470618",
+      "status": "ACTIVE",
+      "alt_text": "Compact MPV interior, synthetic demo",
+      "data_origin_code": "SYNTHETIC_DEMO"
+    },
+    {
+      "seed_key": "smk:s2:media:innova_front",
+      "file_name": "innova_front.jpg",
+      "fixture_file": "fixtures/media/synthetic-demo/innova_front.jpg",
+      "storage_path": "uploads/innova_front.jpg",
+      "mime_type": "image/jpeg",
+      "file_size_bytes": 52256,
+      "checksum_sha256": "7d0c03251955c836c7c395e7f4f6f64d340369458263dfa07d46d5b318a9ab28",
+      "status": "ACTIVE",
+      "alt_text": "Mid-size MPV exterior, synthetic demo",
+      "data_origin_code": "SYNTHETIC_DEMO"
+    },
+    {
+      "seed_key": "smk:s2:media:alphard_front",
+      "file_name": "alphard_front.jpg",
+      "fixture_file": "fixtures/media/synthetic-demo/alphard_front.jpg",
+      "storage_path": "uploads/alphard_front.jpg",
+      "mime_type": "image/jpeg",
+      "file_size_bytes": 51396,
+      "checksum_sha256": "9336bb22de7230c029f78d6b4168563776c601e26fd8c135802742a220d737c1",
+      "status": "ACTIVE",
+      "alt_text": "Premium MPV exterior, synthetic demo",
+      "data_origin_code": "SYNTHETIC_DEMO"
+    },
+    {
+      "seed_key": "smk:s2:media:villa_pool",
+      "file_name": "villa_pool.jpg",
+      "fixture_file": "fixtures/media/synthetic-demo/villa_pool.jpg",
+      "storage_path": "uploads/villa_pool.jpg",
+      "mime_type": "image/jpeg",
+      "file_size_bytes": 62883,
+      "checksum_sha256": "e679f7a79c798251fc73eb3e7ef66630e40ee6db75d7c64358a38b330ad8becf",
+      "status": "ACTIVE",
+      "alt_text": "Tropical villa pool, synthetic demo",
+      "data_origin_code": "SYNTHETIC_DEMO"
+    },
+    {
+      "seed_key": "smk:s2:media:unsafe_media",
+      "file_name": "suspicious.jpg",
+      "fixture_file": "fixtures/media/synthetic-demo/suspicious.jpg",
+      "storage_path": "uploads/suspicious.jpg",
+      "mime_type": "image/jpeg",
+      "file_size_bytes": 50868,
+      "checksum_sha256": "b2353fcb9efa751a191ad304f7edb6404c7d51bf00f956b965f07f1ac857fc60",
+      "status": "UNSAFE",
+      "alt_text": "Unsafe negative-test fixture; never public",
+      "data_origin_code": "SYNTHETIC_DEMO"
+    }
+  ]
+}
