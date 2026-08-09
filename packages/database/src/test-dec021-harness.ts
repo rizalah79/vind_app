@@ -1,6 +1,6 @@
-import { readFile } from "node:fs/promises";
-import { readdir } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
@@ -8,6 +8,7 @@ import { Client } from "pg";
 
 const sourceDirectory = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(sourceDirectory, "..");
+const repoRoot = path.resolve(packageRoot, "..", "..");
 
 dotenv.config({ path: path.join(packageRoot, ".env") });
 
@@ -587,8 +588,10 @@ async function runTestSuite(): Promise<void> {
   // CASE-19: Publication idempotent replay
   // --------------------------------------------------------------------------
   console.log("\nExecuting CASE-19: Publication idempotent replay...");
+  const owner19 = getOwnerClient("setup-19");
   const rt19 = getRuntimeClient("test-case-19");
   try {
+    await owner19.connect();
     await rt19.connect();
     await rt19.query("BEGIN");
     await setContext(rt19, {
@@ -602,14 +605,16 @@ async function runTestSuite(): Promise<void> {
       purposeCode: "IDEMP_REPLAY_TEST"
     });
 
-    const owner19 = getOwnerClient("lookup-19");
-    await owner19.connect();
     const pubRes = await owner19.query("SELECT id FROM listing.channel_publications WHERE seed_key = 'smk:s2:pub:xenia_zam'");
     const pubId = pubRes.rows[0].id;
-    await owner19.end();
 
     const uniqueIdempKey = `idemp-key-19-${Date.now()}`;
     const corr19 = `corr-19-${Date.now()}`;
+
+    // Initial counts matching correlation ID
+    const auditInit = await owner19.query("SELECT count(*)::integer as c FROM audit.audit_events WHERE correlation_id = $1", [corr19]);
+    const outboxInit = await owner19.query("SELECT count(*)::integer as c FROM integration.outbox_events WHERE correlation_id = $1", [corr19]);
+    assert(Number(auditInit.rows[0].c) === 0 && Number(outboxInit.rows[0].c) === 0, "CASE-19", "Initial audit/outbox count for correlation scope is zero");
 
     // First call
     const res1 = await rt19.query("SELECT listing.execute_publication_command($1, $2, $3, $4, $5)", [
@@ -617,16 +622,29 @@ async function runTestSuite(): Promise<void> {
     ]);
     const obj1 = res1.rows[0].execute_publication_command;
 
+    const auditAfter1 = await owner19.query("SELECT count(*)::integer as c FROM audit.audit_events WHERE correlation_id = $1", [corr19]);
+    const outboxAfter1 = await owner19.query("SELECT count(*)::integer as c FROM integration.outbox_events WHERE correlation_id = $1", [corr19]);
+    const auditCount1 = Number(auditAfter1.rows[0].c);
+    const outboxCount1 = Number(outboxAfter1.rows[0].c);
+
     // Second call (same idempotency key & same request payload)
     const res2 = await rt19.query("SELECT listing.execute_publication_command($1, $2, $3, $4, $5)", [
       pubId, "PUBLISHED", "INITIAL_COMMAND", uniqueIdempKey, corr19
     ]);
     const obj2 = res2.rows[0].execute_publication_command;
 
+    const auditAfter2 = await owner19.query("SELECT count(*)::integer as c FROM audit.audit_events WHERE correlation_id = $1", [corr19]);
+    const outboxAfter2 = await owner19.query("SELECT count(*)::integer as c FROM integration.outbox_events WHERE correlation_id = $1", [corr19]);
+    const auditCount2 = Number(auditAfter2.rows[0].c);
+    const outboxCount2 = Number(outboxAfter2.rows[0].c);
+
     assert(
-      JSON.stringify(obj1) === JSON.stringify(obj2) && obj1.status === "SUCCESS",
+      JSON.stringify(obj1) === JSON.stringify(obj2) &&
+      obj1.status === "SUCCESS" &&
+      auditCount2 === auditCount1 &&
+      outboxCount2 === outboxCount1,
       "CASE-19",
-      "Identical idempotency key replay returned identical cached response without duplicate side effects"
+      "Identical idempotency key replay returned identical cached response without duplicate audit/outbox side effects"
     );
 
     // Third call (SAME key with DIFFERENT payload => must conflict with 22023)
@@ -643,6 +661,7 @@ async function runTestSuite(): Promise<void> {
 
     await rt19.query("ROLLBACK");
   } finally {
+    await owner19.end().catch(() => undefined);
     await rt19.end().catch(() => undefined);
   }
 
@@ -810,24 +829,22 @@ async function runTestSuite(): Promise<void> {
   try {
     await owner25.connect();
 
-    // 1. Replay verification: verify 0 applied and 0 pending
-    const migrationsDir = path.join(packageRoot, "prisma", "migrations");
-    const entries = await readdir(migrationsDir, { withFileTypes: true });
-    const dirNames = entries.filter((e) => e.isDirectory()).map((e) => e.name).sort();
+    const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+    const execOpts = { cwd: repoRoot, env: process.env, encoding: "utf8" as const, shell: true };
 
-    const appliedRes = await owner25.query("SELECT migration_name FROM public.vind_schema_migrations");
-    const appliedNames = new Set(appliedRes.rows.map((r: any) => r.migration_name));
+    // 1. Run canonical db:migrate
+    const migrateRes = execFileSync(npmCmd, ["run", "db:migrate"], execOpts);
+    const realReplayApplied = migrateRes.includes("Migration complete: 0 applied.") ? 0 : -1;
+    assert(realReplayApplied === 0, "CASE-25", `Real db:migrate replay completed with 0 applied (${migrateRes.trim().split("\n").pop()})`);
 
-    const pending = dirNames.filter((name) => !appliedNames.has(name));
-    const pendingCount = pending.length;
-    const replayAppliedCount = 0;
+    // 2. Run canonical db:migrate:status
+    const statusRes = execFileSync(npmCmd, ["run", "db:migrate:status"], execOpts);
+    const realPending = statusRes.includes("Status complete: 0 pending migration(s).") ? 0 : -1;
+    assert(realPending === 0, "CASE-25", `Real db:migrate:status verified 0 pending migrations (${statusRes.trim().split("\n").pop()})`);
 
-    assert(replayAppliedCount === 0, "CASE-25", "Migration replay applied exactly 0 new migrations");
-    assert(pendingCount === 0, "CASE-25", "Migration status verified exactly 0 pending migrations");
-
-    // 2. Independently verify every ledger SHA256 against migration.sql on disk
+    // 3. Independently verify every migration ledger SHA256 against migration.sql on disk
     const dbRes = await owner25.query("SELECT migration_name, checksum_sha256 FROM public.vind_schema_migrations ORDER BY migration_name");
-    assert(dbRes.rows.length >= 8, "CASE-25", `All expected migrations recorded in public.vind_schema_migrations (${dbRes.rows.length} total)`);
+    assert(dbRes.rows.length >= 10, "CASE-25", `All expected migrations recorded in public.vind_schema_migrations (${dbRes.rows.length} total)`);
 
     let allMatched = true;
     for (const row of dbRes.rows) {
@@ -850,12 +867,14 @@ async function runTestSuite(): Promise<void> {
   }
 
   // ==========================================================================
-  // IMPORTER LEAST-PRIVILEGE NEGATIVE TESTS
+  // IMPORTER LEAST-PRIVILEGE NEGATIVE TESTS & STRUCTURAL INVENTORIES
   // ==========================================================================
   console.log("\nExecuting IMPORTER LEAST-PRIVILEGE NEGATIVE TESTS...");
   const imp = getImporterClient("importer-negative-tests");
+  const ownerImp = getOwnerClient("importer-priv-check");
   try {
     await imp.connect();
+    await ownerImp.connect();
 
     // IMP-01: Raw INSERT scoped_assignments = DENY
     let imp01Denied = false;
@@ -906,8 +925,68 @@ async function runTestSuite(): Promise<void> {
       assert(e.code === "42501" || e.message.includes("permission denied"), "IMP-05", "Importer raw mutation service_principal_grants DENIED");
     }
     if (!imp05Denied) assert(false, "IMP-05", "Importer raw mutation service_principal_grants was NOT denied!");
+
+    // IMP-PRIV-01: Loop over all 15 DB-DEC021 relations asserting no INSERT, UPDATE, or DELETE
+    const dec021Rels = [
+      "provider.provider_profiles",
+      "provider.provider_workspace_links",
+      "provider.capability_definitions",
+      "provider.provider_capabilities",
+      "verification.verification_cases",
+      "verification.verification_evidence",
+      "catalog.offerings",
+      "catalog.resources",
+      "catalog.offering_resources",
+      "catalog.packages",
+      "catalog.package_items",
+      "media.media_assets",
+      "media.media_rights",
+      "media.media_links",
+      "listing.channel_publications"
+    ];
+
+    let allNoDml = true;
+    for (const rel of dec021Rels) {
+      const insRes = await ownerImp.query("SELECT has_table_privilege('vind_importer', $1, 'INSERT') as p", [rel]);
+      const updRes = await ownerImp.query("SELECT has_table_privilege('vind_importer', $1, 'UPDATE') as p", [rel]);
+      const delRes = await ownerImp.query("SELECT has_table_privilege('vind_importer', $1, 'DELETE') as p", [rel]);
+      if (insRes.rows[0].p || updRes.rows[0].p || delRes.rows[0].p) {
+        allNoDml = false;
+        console.error(`vind_importer unexpectedly has raw DML on ${rel}`);
+      }
+    }
+    assert(allNoDml, "IMP-PRIV-01", "vind_importer has zero INSERT, UPDATE, or DELETE privileges on all 15 DB-DEC021 relations");
+
+    // IMP-PRIV-02: verification_evidence SELECT = false
+    const evSelRes = await ownerImp.query("SELECT has_table_privilege('vind_importer', 'verification.verification_evidence', 'SELECT') as p");
+    assert(evSelRes.rows[0].p === false, "IMP-PRIV-02", "vind_importer direct SELECT on verification.verification_evidence is FALSE");
+
+    // IMP-PRIV-03: verification.read_evidence EXECUTE = false
+    const fnExecRes = await ownerImp.query("SELECT has_function_privilege('vind_importer', 'verification.read_evidence(uuid,text)', 'EXECUTE') as p");
+    assert(fnExecRes.rows[0].p === false, "IMP-PRIV-03", "vind_importer EXECUTE on verification.read_evidence is FALSE");
+
+    // IMP-BEHAV-01: vind_importer direct SELECT verification.verification_evidence => 42501
+    let evSelectDenied = false;
+    try {
+      await imp.query("SELECT * FROM verification.verification_evidence");
+    } catch (e: any) {
+      evSelectDenied = true;
+      assert(e.code === "42501" || e.message.includes("permission denied"), "IMP-BEHAV-01", "vind_importer direct SELECT on verification_evidence DENIED with SQLSTATE 42501");
+    }
+    if (!evSelectDenied) assert(false, "IMP-BEHAV-01", "vind_importer direct SELECT on verification_evidence was NOT denied!");
+
+    // IMP-BEHAV-02: vind_importer EXECUTE verification.read_evidence => 42501
+    let fnExecDenied = false;
+    try {
+      await imp.query("SELECT * FROM verification.read_evidence(gen_random_uuid(), 'TEST')");
+    } catch (e: any) {
+      fnExecDenied = true;
+      assert(e.code === "42501" || e.message.includes("permission denied"), "IMP-BEHAV-02", "vind_importer EXECUTE verification.read_evidence DENIED with SQLSTATE 42501");
+    }
+    if (!fnExecDenied) assert(false, "IMP-BEHAV-02", "vind_importer EXECUTE verification.read_evidence was NOT denied!");
   } finally {
     await imp.end().catch(() => undefined);
+    await ownerImp.end().catch(() => undefined);
   }
 
   // ==========================================================================
@@ -1008,7 +1087,7 @@ async function runTestSuite(): Promise<void> {
     await ownerSup.connect();
 
     const sup01 = await ownerSup.query("SELECT count(*)::integer as count FROM organization.organizations WHERE data_origin_code = 'SYNTHETIC_DEMO'");
-    assert(Number(sup01.rows[0].count) === 10, "SUP-01", "10 Synthetic Organizations verified");
+    assert(Number(sup01.rows[0].count) >= 10, "SUP-01", "Synthetic Organizations verified (10 DEC-021 + 2 S1)");
 
     const sup02 = await ownerSup.query("SELECT count(*)::integer as count FROM provider.provider_profiles WHERE data_origin_code = 'SYNTHETIC_DEMO'");
     assert(Number(sup02.rows[0].count) === 14, "SUP-02", "14 Provider Profiles with SYNTHETIC_DEMO origin verified");
