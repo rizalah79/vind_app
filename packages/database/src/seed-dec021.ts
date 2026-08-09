@@ -49,6 +49,7 @@ validateLocalConnectionUrl(runtimeConnectionString, "DATABASE_URL");
 
 async function applySeed(): Promise<void> {
   const seedSql = await readFile(path.join(seedDirectory, "seed.sql"), "utf8");
+  const mediaSql = await readFile(path.join(seedDirectory, "media-fixture-metadata.sql"), "utf8");
   const client = new Client({ connectionString: migrationConnectionString, application_name: "vind-seed-dec021-apply" });
 
   try {
@@ -58,7 +59,8 @@ async function applySeed(): Promise<void> {
     await client.query("SET LOCAL timezone TO 'UTC'");
     await client.query("SELECT set_config('vind.command_execution_active', 'on', true)");
 
-    const cleanSql = seedSql
+    const combinedSql = seedSql + "\n" + mediaSql;
+    const cleanSql = combinedSql
       .replace(/--.*$/gm, "")
       .replace(/\/\*[\s\S]*?\*\//g, "");
 

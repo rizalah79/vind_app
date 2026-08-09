@@ -56,3 +56,5 @@ Thumbs.db
 !/.env.example
 !/.env.database.example
 !/packages/database/.env.example
+
+uploads/
