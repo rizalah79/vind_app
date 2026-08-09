@@ -21,11 +21,11 @@ dotenv.config({
 
 const command = (process.argv[2] ?? "apply") as SeedCommand;
 
-const importConnectionString = process.env.DATABASE_IMPORT_URL;
+const migrationConnectionString = process.env.DATABASE_MIGRATION_URL;
 const runtimeConnectionString = process.env.DATABASE_URL;
 
-if (!importConnectionString || !runtimeConnectionString) {
-  throw new Error("DATABASE_IMPORT_URL and DATABASE_URL are required.");
+if (!migrationConnectionString || !runtimeConnectionString) {
+  throw new Error("DATABASE_MIGRATION_URL and DATABASE_URL are required.");
 }
 
 function validateLocalConnectionUrl(connectionString: string, label: string): void {
@@ -44,16 +44,17 @@ function validateLocalConnectionUrl(connectionString: string, label: string): vo
   }
 }
 
-validateLocalConnectionUrl(importConnectionString, "DATABASE_IMPORT_URL");
+validateLocalConnectionUrl(migrationConnectionString, "DATABASE_MIGRATION_URL");
 validateLocalConnectionUrl(runtimeConnectionString, "DATABASE_URL");
 
 async function applySeed(): Promise<void> {
   const seedSql = await readFile(path.join(seedDirectory, "seed.sql"), "utf8");
-  const client = new Client({ connectionString: importConnectionString, application_name: "vind-seed-dec021-apply" });
+  const client = new Client({ connectionString: migrationConnectionString, application_name: "vind-seed-dec021-apply" });
 
   try {
     await client.connect();
     await client.query("BEGIN");
+    await client.query("SET ROLE vind_db_owner");
     await client.query("SET LOCAL timezone TO 'UTC'");
     await client.query("SELECT set_config('vind.command_execution_active', 'on', true)");
 
@@ -70,6 +71,7 @@ async function applySeed(): Promise<void> {
       await client.query(statement);
     }
 
+    await client.query("RESET ROLE");
     await client.query("COMMIT");
     console.log("SMK Slice 2 DB-DEC021 seed applied successfully.");
   } catch (error) {
@@ -81,11 +83,11 @@ async function applySeed(): Promise<void> {
 }
 
 async function verifySeed(): Promise<void> {
-  const client = new Client({ connectionString: importConnectionString, application_name: "vind-seed-dec021-verify" });
+  const client = new Client({ connectionString: migrationConnectionString, application_name: "vind-seed-dec021-verify" });
 
   try {
     await client.connect();
-    await client.query("SELECT set_config('vind.command_execution_active', 'on', false)");
+    await client.query("SET ROLE vind_db_owner");
     const resOrgs = await client.query("SELECT count(*)::integer as count FROM organization.organizations WHERE data_origin_code = 'SYNTHETIC_DEMO'");
     const resProvs = await client.query("SELECT count(*)::integer as count FROM provider.provider_profiles");
     const resCases = await client.query("SELECT count(*)::integer as count FROM verification.verification_cases");
@@ -94,6 +96,7 @@ async function verifySeed(): Promise<void> {
     const resPubs = await client.query("SELECT count(*)::integer as count FROM listing.channel_publications");
     const resMedia = await client.query("SELECT count(*)::integer as count FROM media.media_assets");
     const resGeos = await client.query("SELECT count(*)::integer as count FROM geo.regions WHERE seed_key LIKE 'smk:s2:geo:%'");
+    await client.query("RESET ROLE");
 
     console.log("Seed verification counts:");
     console.log(`- Synthetic Organizations: ${resOrgs.rows[0].count}`);

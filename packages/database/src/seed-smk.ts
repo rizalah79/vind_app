@@ -34,14 +34,22 @@ dotenv.config({
 const command = (process.argv[2] ?? "apply") as SeedCommand;
 const argumentsSet = new Set(process.argv.slice(3));
 
-const importConnectionString =
-  process.env.DATABASE_IMPORT_URL;
+const rawMigrationUrl = process.env.DATABASE_MIGRATION_URL;
+
+function getMigrationUrl(): string | undefined {
+  if (!rawMigrationUrl) return undefined;
+  const url = new URL(rawMigrationUrl);
+  url.searchParams.set("options", "-c role=vind_db_owner");
+  return url.toString();
+}
+
+const migrationConnectionString = getMigrationUrl();
 
 const runtimeConnectionString =
   process.env.DATABASE_URL;
 
-if (!importConnectionString) {
-  throw new Error("DATABASE_IMPORT_URL is required.");
+if (!migrationConnectionString) {
+  throw new Error("DATABASE_MIGRATION_URL is required.");
 }
 
 if (!runtimeConnectionString) {
@@ -79,8 +87,8 @@ function validateLocalConnectionUrl(
 }
 
 validateLocalConnectionUrl(
-  importConnectionString,
-  "DATABASE_IMPORT_URL"
+  migrationConnectionString,
+  "DATABASE_MIGRATION_URL"
 );
 
 validateLocalConnectionUrl(
@@ -136,7 +144,7 @@ async function assertDatabaseIdentity(
     );
   }
 
-  if (identity.effective_user_name !== expectedSessionUser) {
+  if (identity.effective_user_name !== expectedSessionUser && identity.effective_user_name !== "vind_db_owner") {
     throw new Error(
       `Unexpected effective user: ${identity.effective_user_name}`
     );
@@ -850,16 +858,22 @@ async function applySeed(): Promise<void> {
   );
 
   const client = new Client({
-    connectionString: importConnectionString,
-    application_name: "vind-smk-slice-1-seed"
+    connectionString: migrationConnectionString,
+    application_name: "vind-smk-slice-1-apply"
   });
 
   try {
     await client.connect();
-    await assertDatabaseIdentity(client, "vind_importer");
+
+    await assertDatabaseIdentity(
+      client,
+      "vind_migrator"
+    );
+
     await assertRequiredMigrations(client);
 
     await client.query("BEGIN");
+    await client.query("SET ROLE vind_db_owner");
 
     try {
       await client.query(
@@ -869,6 +883,7 @@ async function applySeed(): Promise<void> {
         "SET LOCAL statement_timeout TO '2min'"
       );
       await client.query(seedSql);
+      await client.query("RESET ROLE");
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -888,8 +903,8 @@ async function applySeed(): Promise<void> {
 
 async function verifySeed(): Promise<void> {
   const importClient = new Client({
-    connectionString: importConnectionString,
-    application_name: "vind-smk-slice-1-verify-importer"
+    connectionString: migrationConnectionString,
+    application_name: "vind-smk-slice-1-verify-migrator"
   });
 
   let ids: SeedIds;
@@ -898,7 +913,7 @@ async function verifySeed(): Promise<void> {
     await importClient.connect();
     await assertDatabaseIdentity(
       importClient,
-      "vind_importer"
+      "vind_migrator"
     );
     await assertRequiredMigrations(importClient);
     await verifySeedCounts(importClient);
@@ -920,13 +935,13 @@ async function verifySeed(): Promise<void> {
       "vind_app_runtime"
     );
     await verifyRuntimeRls(runtimeClient, ids);
+
+    console.log(
+      "SMK Slice 1 seed and RLS verification passed."
+    );
   } finally {
     await runtimeClient.end().catch(() => undefined);
   }
-
-  console.log(
-    "SMK Slice 1 seed and RLS verification passed."
-  );
 }
 
 async function cleanupSeed(): Promise<void> {
@@ -942,13 +957,13 @@ async function cleanupSeed(): Promise<void> {
   );
 
   const client = new Client({
-    connectionString: importConnectionString,
+    connectionString: migrationConnectionString,
     application_name: "vind-smk-slice-1-cleanup"
   });
 
   try {
     await client.connect();
-    await assertDatabaseIdentity(client, "vind_importer");
+    await assertDatabaseIdentity(client, "vind_migrator");
 
     await client.query("BEGIN");
 

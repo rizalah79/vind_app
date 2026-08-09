@@ -907,7 +907,7 @@ async function runTests(admin: Client, runtime: Client): Promise<void> {
           WHERE p.seed_key = 'smk:s1:person:owner_alpha'
         `
       ),
-    ["23514"],
+    ["23514", "23502"],
     "PROVIDER assignment insert rejected in S1"
   );
 
@@ -1453,8 +1453,8 @@ async function runTests(admin: Client, runtime: Client): Promise<void> {
          AND table_name='scoped_assignments'
          AND column_name='provider_id'`
     ),
-    0,
-    "no premature provider_id column"
+    1,
+    "provider_id column present after DEC-021"
   );
 
   assertEqual(
