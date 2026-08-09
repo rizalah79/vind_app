@@ -23,6 +23,7 @@
                     "db:seed:smk:cleanup":  "npm run seed:smk:cleanup --workspace @vind/database --",
                     "db:seed:dec021":  "npm run seed:dec021 --workspace @vind/database",
                     "db:seed:dec021:verify":  "npm run seed:dec021:verify --workspace @vind/database",
-                    "test": "npm run db:check"
+                    "db:test:dec021": "npm run test:dec021 --workspace @vind/database",
+                    "test": "npm run db:check && npm run db:test:dec021"
                 }
 }

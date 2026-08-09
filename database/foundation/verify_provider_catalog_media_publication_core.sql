@@ -561,7 +561,7 @@ BEGIN
                 );
             END IF;
 
-            IF NOT EXISTS (
+            IF v_table <> 'verification.verification_evidence' AND NOT EXISTS (
                 SELECT 1
                 FROM pg_class
                 WHERE oid = to_regclass(v_table)
@@ -807,14 +807,19 @@ BEGIN
             END IF;
         END LOOP;
 
-        IF position('capabil' IN lower(v_definition)) = 0
-           OR (
-               position('current_organization_id' IN lower(v_definition)) = 0
-               AND position('provider_workspace_links' IN lower(v_definition)) = 0
-           ) THEN
+        IF position('access.has_local_capability' IN lower(v_definition)) = 0
+           AND position('access.has_platform_capability' IN lower(v_definition)) = 0
+        THEN
             v_failures := array_append(
                 v_failures,
-                'Provider status command lacks explicit capability and provider-boundary authorization checks.'
+                'Provider status command lacks explicit capability authorization checks.'
+            );
+        END IF;
+
+        IF position('current_organization_id' IN lower(v_definition)) > 0 THEN
+            v_failures := array_append(
+                v_failures,
+                'Provider status command contains organization bypass shortcut.'
             );
         END IF;
     END IF;
@@ -849,10 +854,8 @@ BEGIN
         FOREACH v_relation IN ARRAY ARRAY[
             'public_listing',
             'channel_publication_id',
-            'link_status',
-            'effective_to',
-            'approved',
-            'active'
+            'publication_status',
+            'approved'
         ]
         LOOP
             IF position(lower(v_relation) IN lower(v_definition)) = 0 THEN
@@ -866,14 +869,19 @@ BEGIN
             END IF;
         END LOOP;
 
-        IF position('capabil' IN lower(v_definition)) = 0
-           OR (
-               position('current_organization_id' IN lower(v_definition)) = 0
-               AND position('provider_workspace_links' IN lower(v_definition)) = 0
-           ) THEN
+        IF position('access.has_local_capability' IN lower(v_definition)) = 0
+           AND position('access.has_platform_capability' IN lower(v_definition)) = 0
+        THEN
             v_failures := array_append(
                 v_failures,
-                'Publication command lacks explicit capability and provider-boundary authorization checks.'
+                'Publication command lacks explicit capability authorization checks.'
+            );
+        END IF;
+
+        IF position('current_organization_id' IN lower(v_definition)) > 0 THEN
+            v_failures := array_append(
+                v_failures,
+                'Publication command contains organization bypass shortcut.'
             );
         END IF;
     END IF;
@@ -897,16 +905,86 @@ BEGIN
             );
         END IF;
 
-        IF position('capabil' IN lower(v_definition)) = 0
-           OR (
-               position('current_organization_id' IN lower(v_definition)) = 0
-               AND position('provider_profile_id' IN lower(v_definition)) = 0
-           ) THEN
+        IF position('has_platform_capability' IN lower(v_definition)) = 0
+           OR position('verification.evidence.read' IN lower(v_definition)) = 0
+        THEN
             v_failures := array_append(
                 v_failures,
-                'verification.read_evidence lacks explicit restricted-read capability and tenant-boundary authorization.'
+                'verification.read_evidence lacks explicit platform-only capability authorization.'
             );
         END IF;
+
+        IF position('has_local_capability' IN lower(v_definition)) > 0
+           OR position('current_organization_id' IN lower(v_definition)) > 0
+        THEN
+            v_failures := array_append(
+                v_failures,
+                'verification.read_evidence contains unsafe local/organization shortcut.'
+            );
+        END IF;
+    END IF;
+
+    ---------------------------------------------------------------------------
+    -- K. Provider Provenance & Access Remediation Checks
+    ---------------------------------------------------------------------------
+    IF to_regclass('provider.provider_profiles') IS NOT NULL THEN
+        FOR v_record IN
+            SELECT *
+            FROM (VALUES
+                ('data_origin_code'),
+                ('source_import_batch_id'),
+                ('source_reference')
+            ) AS prov_cols(column_name)
+        LOOP
+            IF NOT EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'provider'
+                  AND table_name = 'provider_profiles'
+                  AND column_name = v_record.column_name
+            ) THEN
+                v_failures := array_append(
+                    v_failures,
+                    format('Provider provenance column missing: provider.provider_profiles.%I.', v_record.column_name)
+                );
+            END IF;
+        END LOOP;
+
+        IF NOT EXISTS (
+            SELECT 1
+            FROM pg_trigger
+            WHERE tgrelid = 'provider.provider_profiles'::regclass
+              AND tgname = 'trg_prevent_provider_provenance_update'
+              AND NOT tgisinternal
+              AND tgenabled <> 'D'
+        ) THEN
+            v_failures := array_append(
+                v_failures,
+                'Provider provenance immutability trigger trg_prevent_provider_provenance_update missing or disabled.'
+            );
+        END IF;
+    END IF;
+
+    IF to_regclass('access.scoped_assignments') IS NOT NULL THEN
+        IF NOT EXISTS (
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'access'
+              AND table_name = 'scoped_assignments'
+              AND column_name = 'provider_id'
+        ) THEN
+            v_failures := array_append(
+                v_failures,
+                'Column provider_id missing on access.scoped_assignments.'
+            );
+        END IF;
+    END IF;
+
+    IF to_regprocedure('provider.execute_management_authority_command(uuid,uuid,uuid,text,text,text,text)') IS NULL THEN
+        v_failures := array_append(
+            v_failures,
+            'Required management authority function provider.execute_management_authority_command(uuid,uuid,uuid,text,text,text,text) is missing.'
+        );
     END IF;
 
     ---------------------------------------------------------------------------

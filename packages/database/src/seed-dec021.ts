@@ -35,8 +35,8 @@ function validateLocalConnectionUrl(connectionString: string, label: string): vo
     throw new Error(`${label} must use localhost. Received: ${parsed.hostname}`);
   }
 
-  if (parsed.port !== "5432" && parsed.port !== "5433") {
-    throw new Error(`${label} must use port 5432 or 5433. Received: ${parsed.port}`);
+  if (parsed.port && parsed.port !== "5432") {
+    throw new Error(`${label} must use canonical port 5432. Received: ${parsed.port}`);
   }
 
   if (parsed.pathname !== "/vind_app_dev" && parsed.pathname !== "/vind_app_disposable_dev") {
@@ -55,6 +55,7 @@ async function applySeed(): Promise<void> {
     await client.connect();
     await client.query("BEGIN");
     await client.query("SET LOCAL timezone TO 'UTC'");
+    await client.query("SELECT set_config('vind.command_execution_active', 'on', true)");
 
     const cleanSql = seedSql
       .replace(/--.*$/gm, "")

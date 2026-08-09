@@ -104,21 +104,21 @@ ON CONFLICT (seed_key) DO UPDATE SET status = EXCLUDED.status;
 -- 4. Provider Profiles & Workspace Links (~14 profiles)
 -- ============================================================================
 
-INSERT INTO provider.provider_profiles (seed_key, owning_organization_id, owning_person_id, provider_type, status, legal_name, display_name, retention_class_code)
-SELECT 'smk:s2:prov:alpha_car', o.id, NULL::uuid, 'COMPANY', 'ACTIVE', 'PT Alpha Rental Indonesia', 'Alpha Car Rental', 'OPS' FROM organization.organizations o WHERE o.seed_key = 'smk:s2:org:alpha' UNION ALL
-SELECT 'smk:s2:prov:alpha_bus', o.id, NULL::uuid, 'COMPANY', 'ACTIVE', 'PT Alpha Bus Pariwisata', 'Alpha Luxury Bus', 'OPS' FROM organization.organizations o WHERE o.seed_key = 'smk:s2:org:alpha' UNION ALL
-SELECT 'smk:s2:prov:beta_van', o.id, NULL::uuid, 'COMPANY', 'ACTIVE', 'CV Beta Transport Express', 'Beta Travel Van', 'OPS' FROM organization.organizations o WHERE o.seed_key = 'smk:s2:org:beta' UNION ALL
-SELECT 'smk:s2:prov:beta_draft', o.id, NULL::uuid, 'COMPANY', 'DRAFT', 'CV Beta Logistik Baru', 'Beta Draft Cargo', 'OPS' FROM organization.organizations o WHERE o.seed_key = 'smk:s2:org:beta' UNION ALL
-SELECT 'smk:s2:prov:gamma_tour', o.id, NULL::uuid, 'COMPANY', 'ACTIVE', 'PT Gamma Tour & Travel', 'Gamma Island Tours', 'OPS' FROM organization.organizations o WHERE o.seed_key = 'smk:s2:org:gamma' UNION ALL
-SELECT 'smk:s2:prov:delta_cargo', o.id, NULL::uuid, 'COMPANY', 'ACTIVE', 'PT Delta Logistics Nusantara', 'Delta Trucking Services', 'OPS' FROM organization.organizations o WHERE o.seed_key = 'smk:s2:org:delta' UNION ALL
-SELECT 'smk:s2:prov:epsilon_villa', o.id, NULL::uuid, 'COMPANY', 'ACTIVE', 'PT Epsilon Villa & Resort', 'Epsilon Luxury Villas', 'OPS' FROM organization.organizations o WHERE o.seed_key = 'smk:s2:org:epsilon' UNION ALL
-SELECT 'smk:s2:prov:zeta_scooter', o.id, NULL::uuid, 'COMPANY', 'ACTIVE', 'CV Zeta Mobility Solutions', 'Zeta Scooter Rental', 'OPS' FROM organization.organizations o WHERE o.seed_key = 'smk:s2:org:zeta' UNION ALL
-SELECT 'smk:s2:prov:eta_limo', o.id, NULL::uuid, 'COMPANY', 'ACTIVE', 'PT Eta Premium Services', 'Eta Exec Services', 'OPS' FROM organization.organizations o WHERE o.seed_key = 'smk:s2:org:eta' UNION ALL
-SELECT 'smk:s2:prov:theta_crane', o.id, NULL::uuid, 'COMPANY', 'ACTIVE', 'PT Theta Heavy Equipment', 'Theta Crane & Excavator', 'OPS' FROM organization.organizations o WHERE o.seed_key = 'smk:s2:org:theta' UNION ALL
-SELECT 'smk:s2:prov:iota_yacht', o.id, NULL::uuid, 'COMPANY', 'SUSPENDED', 'PT Iota Marine & Charter', 'Iota Yacht Charters', 'OPS' FROM organization.organizations o WHERE o.seed_key = 'smk:s2:org:iota' UNION ALL
-SELECT 'smk:s2:prov:kappa_sound', o.id, NULL::uuid, 'COMPANY', 'ARCHIVED', 'PT Kappa Event & Sound', 'Kappa Stage & Lighting', 'OPS' FROM organization.organizations o WHERE o.seed_key = 'smk:s2:org:kappa' UNION ALL
-SELECT 'smk:s2:prov:indiv_iwan', NULL::uuid, p.id, 'INDIVIDUAL', 'ACTIVE', 'Iwan Setiawan', 'Iwan Personal Driver', 'OPS' FROM party.persons p WHERE p.seed_key = 'smk:s2:person:indiv_prov_1' UNION ALL
-SELECT 'smk:s2:prov:indiv_nina', NULL::uuid, p.id, 'INDIVIDUAL', 'ACTIVE', 'Nina Kurnia', 'Nina Licensed Local Guide', 'OPS' FROM party.persons p WHERE p.seed_key = 'smk:s2:person:indiv_prov_2'
+INSERT INTO provider.provider_profiles (seed_key, owning_organization_id, owning_person_id, provider_type, status, legal_name, display_name, data_origin_code, retention_class_code)
+SELECT 'smk:s2:prov:alpha_car', o.id, NULL::uuid, 'COMPANY', 'ACTIVE', 'PT Alpha Rental Indonesia', 'Alpha Car Rental', 'SYNTHETIC_DEMO', 'OPS' FROM organization.organizations o WHERE o.seed_key = 'smk:s2:org:alpha' UNION ALL
+SELECT 'smk:s2:prov:alpha_bus', o.id, NULL::uuid, 'COMPANY', 'ACTIVE', 'PT Alpha Bus Pariwisata', 'Alpha Luxury Bus', 'SYNTHETIC_DEMO', 'OPS' FROM organization.organizations o WHERE o.seed_key = 'smk:s2:org:alpha' UNION ALL
+SELECT 'smk:s2:prov:beta_van', o.id, NULL::uuid, 'COMPANY', 'ACTIVE', 'CV Beta Transport Express', 'Beta Travel Van', 'SYNTHETIC_DEMO', 'OPS' FROM organization.organizations o WHERE o.seed_key = 'smk:s2:org:beta' UNION ALL
+SELECT 'smk:s2:prov:beta_draft', o.id, NULL::uuid, 'COMPANY', 'DRAFT', 'CV Beta Logistik Baru', 'Beta Draft Cargo', 'SYNTHETIC_DEMO', 'OPS' FROM organization.organizations o WHERE o.seed_key = 'smk:s2:org:beta' UNION ALL
+SELECT 'smk:s2:prov:gamma_tour', o.id, NULL::uuid, 'COMPANY', 'ACTIVE', 'PT Gamma Tour & Travel', 'Gamma Island Tours', 'SYNTHETIC_DEMO', 'OPS' FROM organization.organizations o WHERE o.seed_key = 'smk:s2:org:gamma' UNION ALL
+SELECT 'smk:s2:prov:delta_cargo', o.id, NULL::uuid, 'COMPANY', 'ACTIVE', 'PT Delta Logistics Nusantara', 'Delta Trucking Services', 'SYNTHETIC_DEMO', 'OPS' FROM organization.organizations o WHERE o.seed_key = 'smk:s2:org:delta' UNION ALL
+SELECT 'smk:s2:prov:epsilon_villa', o.id, NULL::uuid, 'COMPANY', 'ACTIVE', 'PT Epsilon Villa & Resort', 'Epsilon Luxury Villas', 'SYNTHETIC_DEMO', 'OPS' FROM organization.organizations o WHERE o.seed_key = 'smk:s2:org:epsilon' UNION ALL
+SELECT 'smk:s2:prov:zeta_scooter', o.id, NULL::uuid, 'COMPANY', 'ACTIVE', 'CV Zeta Mobility Solutions', 'Zeta Scooter Rental', 'SYNTHETIC_DEMO', 'OPS' FROM organization.organizations o WHERE o.seed_key = 'smk:s2:org:zeta' UNION ALL
+SELECT 'smk:s2:prov:eta_limo', o.id, NULL::uuid, 'COMPANY', 'ACTIVE', 'PT Eta Premium Services', 'Eta Exec Services', 'SYNTHETIC_DEMO', 'OPS' FROM organization.organizations o WHERE o.seed_key = 'smk:s2:org:eta' UNION ALL
+SELECT 'smk:s2:prov:theta_crane', o.id, NULL::uuid, 'COMPANY', 'ACTIVE', 'PT Theta Heavy Equipment', 'Theta Crane & Excavator', 'SYNTHETIC_DEMO', 'OPS' FROM organization.organizations o WHERE o.seed_key = 'smk:s2:org:theta' UNION ALL
+SELECT 'smk:s2:prov:iota_yacht', o.id, NULL::uuid, 'COMPANY', 'SUSPENDED', 'PT Iota Marine & Charter', 'Iota Yacht Charters', 'SYNTHETIC_DEMO', 'OPS' FROM organization.organizations o WHERE o.seed_key = 'smk:s2:org:iota' UNION ALL
+SELECT 'smk:s2:prov:kappa_sound', o.id, NULL::uuid, 'COMPANY', 'ARCHIVED', 'PT Kappa Event & Sound', 'Kappa Stage & Lighting', 'SYNTHETIC_DEMO', 'OPS' FROM organization.organizations o WHERE o.seed_key = 'smk:s2:org:kappa' UNION ALL
+SELECT 'smk:s2:prov:indiv_iwan', NULL::uuid, p.id, 'INDIVIDUAL', 'ACTIVE', 'Iwan Setiawan', 'Iwan Personal Driver', 'SYNTHETIC_DEMO', 'OPS' FROM party.persons p WHERE p.seed_key = 'smk:s2:person:indiv_prov_1' UNION ALL
+SELECT 'smk:s2:prov:indiv_nina', NULL::uuid, p.id, 'INDIVIDUAL', 'ACTIVE', 'Nina Kurnia', 'Nina Licensed Local Guide', 'SYNTHETIC_DEMO', 'OPS' FROM party.persons p WHERE p.seed_key = 'smk:s2:person:indiv_prov_2'
 ON CONFLICT (seed_key) DO UPDATE SET display_name = EXCLUDED.display_name;
 
 INSERT INTO provider.provider_workspace_links (seed_key, provider_profile_id, managing_organization_id, workspace_id, link_status)
@@ -303,12 +303,13 @@ ON CONFLICT (seed_key) DO UPDATE SET link_status = EXCLUDED.link_status;
 -- ============================================================================
 
 INSERT INTO access.scoped_assignments (
-  seed_key, subject_person_id, membership_id, role_code, scope_type, organization_id, workspace_id, provider_profile_id, status, retention_class_code
+  seed_key, subject_person_id, membership_id, role_code, scope_type, organization_id, workspace_id, provider_id, status, retention_class_code
 )
-SELECT 'smk:s2:assign:budi_alpha_owner', p.id, m.id, 'OWNER', 'PROVIDER', o.id, NULL::uuid, pr.id, 'ACTIVE', 'PRIV' FROM party.persons p JOIN access.memberships m ON m.seed_key = 'smk:s2:mem:owner_alpha' JOIN organization.organizations o ON o.seed_key = 'smk:s2:org:alpha' JOIN provider.provider_profiles pr ON pr.seed_key = 'smk:s2:prov:alpha_car' WHERE p.seed_key = 'smk:s2:person:owner_alpha' UNION ALL
-SELECT 'smk:s2:assign:siti_alpha_admin', p.id, m.id, 'ADMIN', 'PROVIDER', o.id, NULL::uuid, pr.id, 'ACTIVE', 'PRIV' FROM party.persons p JOIN access.memberships m ON m.seed_key = 'smk:s2:mem:admin_alpha' JOIN organization.organizations o ON o.seed_key = 'smk:s2:org:alpha' JOIN provider.provider_profiles pr ON pr.seed_key = 'smk:s2:prov:alpha_car' WHERE p.seed_key = 'smk:s2:person:admin_alpha' UNION ALL
-SELECT 'smk:s2:assign:dewi_alpha_cm', p.id, m.id, 'CONTENT_MANAGER', 'PROVIDER', o.id, NULL::uuid, pr.id, 'ACTIVE', 'PRIV' FROM party.persons p JOIN access.memberships m ON m.seed_key = 'smk:s2:mem:cm_alpha' JOIN organization.organizations o ON o.seed_key = 'smk:s2:org:alpha' JOIN provider.provider_profiles pr ON pr.seed_key = 'smk:s2:prov:alpha_car' WHERE p.seed_key = 'smk:s2:person:cm_alpha' UNION ALL
-SELECT 'smk:s2:assign:agus_beta_owner', p.id, m.id, 'OWNER', 'PROVIDER', o.id, NULL::uuid, pr.id, 'ACTIVE', 'PRIV' FROM party.persons p JOIN access.memberships m ON m.seed_key = 'smk:s2:mem:owner_beta' JOIN organization.organizations o ON o.seed_key = 'smk:s2:org:beta' JOIN provider.provider_profiles pr ON pr.seed_key = 'smk:s2:prov:beta_van' WHERE p.seed_key = 'smk:s2:person:owner_beta'
+SELECT 'smk:s2:assign:budi_alpha_owner', p.id, m.id, 'OWNER', 'PROVIDER', NULL::uuid, NULL::uuid, pr.id, 'ACTIVE', 'PRIV' FROM party.persons p JOIN access.memberships m ON m.seed_key = 'smk:s2:mem:owner_alpha' JOIN provider.provider_profiles pr ON pr.seed_key = 'smk:s2:prov:alpha_car' WHERE p.seed_key = 'smk:s2:person:owner_alpha' UNION ALL
+SELECT 'smk:s2:assign:siti_alpha_admin', p.id, m.id, 'ADMIN', 'PROVIDER', NULL::uuid, NULL::uuid, pr.id, 'ACTIVE', 'PRIV' FROM party.persons p JOIN access.memberships m ON m.seed_key = 'smk:s2:mem:admin_alpha' JOIN provider.provider_profiles pr ON pr.seed_key = 'smk:s2:prov:alpha_car' WHERE p.seed_key = 'smk:s2:person:admin_alpha' UNION ALL
+SELECT 'smk:s2:assign:dewi_alpha_cm', p.id, m.id, 'CONTENT_MANAGER', 'PROVIDER', NULL::uuid, NULL::uuid, pr.id, 'ACTIVE', 'PRIV' FROM party.persons p JOIN access.memberships m ON m.seed_key = 'smk:s2:mem:cm_alpha' JOIN provider.provider_profiles pr ON pr.seed_key = 'smk:s2:prov:alpha_car' WHERE p.seed_key = 'smk:s2:person:cm_alpha' UNION ALL
+SELECT 'smk:s2:assign:agus_beta_owner', p.id, m.id, 'OWNER', 'PROVIDER', NULL::uuid, NULL::uuid, pr.id, 'ACTIVE', 'PRIV' FROM party.persons p JOIN access.memberships m ON m.seed_key = 'smk:s2:mem:owner_beta' JOIN provider.provider_profiles pr ON pr.seed_key = 'smk:s2:prov:beta_van' WHERE p.seed_key = 'smk:s2:person:owner_beta' UNION ALL
+SELECT 'smk:s2:assign:iwan_indiv_owner', p.id, NULL::uuid, 'OWNER', 'PROVIDER', NULL::uuid, NULL::uuid, pr.id, 'ACTIVE', 'PRIV' FROM party.persons p JOIN provider.provider_profiles pr ON pr.seed_key = 'smk:s2:prov:indiv_iwan' WHERE p.seed_key = 'smk:s2:person:indiv_prov_1'
 ON CONFLICT (seed_key) DO UPDATE SET status = EXCLUDED.status;
 
 -- Platform Assignments for Moderator & Operations Admin & Super Admin
