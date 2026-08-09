@@ -1,0 +1,2 @@
+# Enforce LF line endings for all SQL files across all platforms to prevent checksum mismatches
+*.sql text eol=lf
