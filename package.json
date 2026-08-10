@@ -13,7 +13,7 @@
   "scripts": {
     "build": "npm run build --workspace @vind/contracts && npm run db:check && npm run build --workspace @vind/api",
     "typecheck": "npm run typecheck --workspace @vind/contracts && npm run db:check && npm run typecheck --workspace @vind/api",
-    "test": "npm run test:b1",
+    "test": "npm run test:all",
     "test:b1": "npm run test --workspace @vind/contracts && npm run test --workspace @vind/api",
     "test:db": "npm run db:check && npm run db:test:dec021",
     "test:all": "npm run test:b1 && npm run test:db",

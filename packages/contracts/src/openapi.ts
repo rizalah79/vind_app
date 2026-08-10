@@ -1,13 +1,13 @@
 import {
   problemCatalog,
   problemJsonContentType,
-  problemTypeBaseUrl
+  problemTypePrefix
 } from "./problem.js";
 
 export const requestIdHeaderName = "x-request-id" as const;
 
 const problemCodes = Object.keys(problemCatalog);
-const problemTypes = problemCodes.map((code) => `${problemTypeBaseUrl}/${code}`);
+const problemTypes = problemCodes.map((code) => `${problemTypePrefix}${code}`);
 
 export const openApiDocument = {
   openapi: "3.1.0",
@@ -32,7 +32,7 @@ export const openApiDocument = {
             content: {
               "application/json": {
                 schema: {
-                  $ref: "#/components/schemas/LiveHealth"
+                  $ref: "#/components/schemas/LiveHealthEnvelope"
                 }
               }
             }
@@ -55,7 +55,7 @@ export const openApiDocument = {
             content: {
               "application/json": {
                 schema: {
-                  $ref: "#/components/schemas/ReadyHealth"
+                  $ref: "#/components/schemas/ReadyHealthEnvelope"
                 }
               }
             }
@@ -135,36 +135,53 @@ export const openApiDocument = {
       },
       ReadyHealth: {
         type: "object",
-        required: ["status", "dependencies"],
+        required: ["status"],
         properties: {
           status: {
             const: "ready"
-          },
-          dependencies: {
-            type: "array",
-            items: {
-              $ref: "#/components/schemas/DependencyReadiness"
-            }
           }
         },
         additionalProperties: false
       },
-      DependencyReadiness: {
+      ResponseMeta: {
         type: "object",
-        required: ["name", "status"],
+        required: ["request_id"],
         properties: {
-          name: {
-            type: "string"
+          request_id: {
+            $ref: "#/components/schemas/RequestId"
+          }
+        },
+        additionalProperties: false
+      },
+      LiveHealthEnvelope: {
+        type: "object",
+        required: ["data", "meta"],
+        properties: {
+          data: {
+            $ref: "#/components/schemas/LiveHealth"
           },
-          status: {
-            enum: ["ready", "down"]
+          meta: {
+            $ref: "#/components/schemas/ResponseMeta"
+          }
+        },
+        additionalProperties: false
+      },
+      ReadyHealthEnvelope: {
+        type: "object",
+        required: ["data", "meta"],
+        properties: {
+          data: {
+            $ref: "#/components/schemas/ReadyHealth"
+          },
+          meta: {
+            $ref: "#/components/schemas/ResponseMeta"
           }
         },
         additionalProperties: false
       },
       ProblemDetails: {
         type: "object",
-        required: ["type", "title", "status", "code", "requestId", "instance"],
+        required: ["type", "title", "status", "code", "request_id", "retryable", "instance"],
         properties: {
           type: {
             enum: problemTypes
@@ -180,17 +197,42 @@ export const openApiDocument = {
           code: {
             enum: problemCodes
           },
-          requestId: {
+          request_id: {
             $ref: "#/components/schemas/RequestId"
+          },
+          retryable: {
+            type: "boolean"
           },
           instance: {
             type: "string"
           },
           detail: {
             type: "string"
+          },
+          field_errors: {
+            type: "array",
+            items: {
+              $ref: "#/components/schemas/FieldError"
+            }
           }
         },
         additionalProperties: true
+      },
+      FieldError: {
+        type: "object",
+        required: ["field", "code"],
+        properties: {
+          field: {
+            type: "string"
+          },
+          code: {
+            type: "string"
+          },
+          message: {
+            type: "string"
+          }
+        },
+        additionalProperties: false
       }
     }
   }

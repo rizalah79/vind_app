@@ -2,7 +2,8 @@ export {
   createProblemDetails,
   problemCatalog,
   problemJsonContentType,
-  problemTypeBaseUrl,
+  problemTypePrefix,
+  type FieldError,
   type ProblemCode,
   type ProblemDetails,
   type ProblemDetailsInput

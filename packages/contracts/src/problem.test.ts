@@ -5,22 +5,45 @@ import {
   problemJsonContentType
 } from "./problem.js";
 
-test("creates stable problem+json details", () => {
+test("creates stable problem+json details with approved fields", () => {
   const problem = createProblemDetails({
-    code: "service_unavailable",
+    code: "DEPENDENCY_UNAVAILABLE",
     requestId: "req_12345678",
     instance: "/api/v1/health/ready",
-    detail: "One or more dependencies are not ready.",
-    extensions: {
-      dependencies: [{ name: "database", status: "down" }]
-    }
+    detail: "A required dependency is unavailable."
   });
 
   assert.equal(problemJsonContentType, "application/problem+json");
-  assert.equal(problem.type, "https://api.vind.app/problems/service_unavailable");
-  assert.equal(problem.title, "Service Unavailable");
+  assert.equal(problem.type, "urn:vind:error:DEPENDENCY_UNAVAILABLE");
+  assert.equal(problem.title, "Dependency Unavailable");
   assert.equal(problem.status, 503);
-  assert.equal(problem.code, "service_unavailable");
-  assert.equal(problem.requestId, "req_12345678");
-  assert.deepEqual(problem.dependencies, [{ name: "database", status: "down" }]);
+  assert.equal(problem.code, "DEPENDENCY_UNAVAILABLE");
+  assert.equal(problem.request_id, "req_12345678");
+  assert.equal(problem.retryable, true);
+  assert.equal("requestId" in problem, false);
+});
+
+test("supports optional field-error details for validation foundations", () => {
+  const problem = createProblemDetails({
+    code: "VALIDATION_FAILED",
+    requestId: "req_validation_123",
+    instance: "/api/v1/example",
+    fieldErrors: [
+      {
+        field: "name",
+        code: "REQUIRED",
+        message: "Name is required."
+      }
+    ]
+  });
+
+  assert.equal(problem.type, "urn:vind:error:VALIDATION_FAILED");
+  assert.equal(problem.retryable, false);
+  assert.deepEqual(problem.field_errors, [
+    {
+      field: "name",
+      code: "REQUIRED",
+      message: "Name is required."
+    }
+  ]);
 });

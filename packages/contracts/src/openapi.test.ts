@@ -8,4 +8,7 @@ test("exports an OpenAPI 3.1 foundation document", () => {
   assert.ok(openApiDocument.paths["/api/v1/health/ready"]);
   assert.ok(openApiDocument.paths["/api/v1/openapi.json"]);
   assert.ok(openApiDocument.components.schemas.ProblemDetails);
+  assert.ok(openApiDocument.components.schemas.LiveHealthEnvelope);
+  assert.ok(openApiDocument.components.schemas.ReadyHealthEnvelope);
+  assert.equal("DependencyReadiness" in openApiDocument.components.schemas, false);
 });

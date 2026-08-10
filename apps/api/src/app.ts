@@ -50,6 +50,18 @@ function sendProblem(
     .send(problem);
 }
 
+function createEnvelope<TData>(
+  data: TData,
+  requestId: string
+): { data: TData; meta: { request_id: string } } {
+  return {
+    data,
+    meta: {
+      request_id: requestId
+    }
+  };
+}
+
 export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   const app = Fastify({
     logger: false,
@@ -66,13 +78,6 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     );
     request.vindRequestId = resolution.requestId;
     reply.header(requestIdHeaderName, resolution.requestId);
-
-    if (!resolution.ok) {
-      throw new HttpProblemError({
-        code: "invalid_request_id",
-        detail: "x-request-id must be 8-128 characters using letters, numbers, '.', '_', ':', or '-'."
-      });
-    }
   });
 
   app.addHook("onSend", async (request, reply, payload) => {
@@ -83,7 +88,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   app.setNotFoundHandler((request, reply) => {
     const problem = createHttpProblem({
       error: new HttpProblemError({
-        code: "not_found",
+        code: "RESOURCE_NOT_FOUND",
         detail: "The requested resource was not found."
       }),
       requestId: getRequestId(request),
@@ -101,27 +106,25 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     sendProblem(reply, problem);
   });
 
-  app.get("/api/v1/health/live", async () => ({
-    status: "live"
+  app.get("/api/v1/health/live", async (request) => ({
+    ...createEnvelope({
+      status: "live"
+    }, getRequestId(request))
   }));
 
-  app.get("/api/v1/health/ready", async () => {
+  app.get("/api/v1/health/ready", async (request) => {
     const readiness = await checkReadiness(readinessDependencies);
 
     if (!readiness.ready) {
       throw new HttpProblemError({
-        code: "service_unavailable",
-        detail: "One or more dependencies are not ready.",
-        extensions: {
-          dependencies: readiness.dependencies
-        }
+        code: "DEPENDENCY_UNAVAILABLE",
+        detail: "A required dependency is unavailable."
       });
     }
 
-    return {
+    return createEnvelope({
       status: "ready",
-      dependencies: readiness.dependencies
-    };
+    }, getRequestId(request));
   });
 
   app.get("/api/v1/openapi.json", async () => openApiDocument);
