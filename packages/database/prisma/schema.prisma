@@ -618,7 +618,7 @@ model auth_sessions {
   absolute_expires_at      DateTime                  @db.Timestamptz(6)
   revoked_at               DateTime?                 @db.Timestamptz(6)
   revocation_reason_code   String?
-  rotated_from_session_id  String?                   @db.Uuid
+  rotated_from_session_id  String?                   @unique @db.Uuid
   retention_class_code     String                    @default("EPH")
   created_at               DateTime                  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
   updated_at               DateTime                  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
