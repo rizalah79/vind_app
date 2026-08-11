@@ -88,6 +88,60 @@ export const openApiDocument = {
           }
         }
       }
+    },
+    "/api/v1/me": {
+      get: {
+        operationId: "getAuthenticatedContext",
+        tags: ["Session"],
+        summary: "Get authenticated context and presentation details",
+        responses: {
+          "200": {
+            description: "Authenticated actor context.",
+            headers: {
+              "x-request-id": {
+                $ref: "#/components/headers/RequestId"
+              }
+            },
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/AuthenticatedContextEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            $ref: "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/api/v1/session/logout": {
+      post: {
+        operationId: "logoutSession",
+        tags: ["Session"],
+        summary: "Revoke session and clear authentication context",
+        responses: {
+          "200": {
+            description: "Session successfully revoked.",
+            headers: {
+              "x-request-id": {
+                $ref: "#/components/headers/RequestId"
+              }
+            },
+            content: {
+              "application/json": {
+                schema: {
+                  $ref: "#/components/schemas/LogoutEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            $ref: "#/components/responses/Problem"
+          }
+        }
+      }
     }
   },
   components: {
@@ -231,6 +285,77 @@ export const openApiDocument = {
           message: {
             type: "string"
           }
+        },
+        additionalProperties: false
+      },
+      AccountSummary: {
+        type: "object",
+        required: ["id", "account_type", "status"],
+        properties: {
+          id: { type: "string" },
+          seed_key: { type: "string" },
+          account_type: { type: "string" },
+          status: { type: "string" }
+        },
+        additionalProperties: false
+      },
+      PersonSummary: {
+        type: "object",
+        required: ["id", "display_name"],
+        properties: {
+          id: { type: "string" },
+          seed_key: { type: "string" },
+          display_name: { type: "string" }
+        },
+        additionalProperties: false
+      },
+      ChannelSummary: {
+        type: "object",
+        required: ["code", "name"],
+        properties: {
+          code: { type: "string" },
+          name: { type: "string" }
+        },
+        additionalProperties: false
+      },
+      AuthenticatedContext: {
+        type: "object",
+        required: ["actor_kind", "authority_plane", "account", "person", "channel"],
+        properties: {
+          actor_kind: { enum: ["HUMAN", "SERVICE"] },
+          authority_plane: { enum: ["RELATIONSHIP", "LOCAL", "PLATFORM", "SERVICE"] },
+          account: { $ref: "#/components/schemas/AccountSummary" },
+          person: { $ref: "#/components/schemas/PersonSummary" },
+          channel: { $ref: "#/components/schemas/ChannelSummary" },
+          organization_id: { type: "string" },
+          workspace_id: { type: "string" },
+          provider_id: { type: "string" }
+        },
+        additionalProperties: false
+      },
+      AuthenticatedContextEnvelope: {
+        type: "object",
+        required: ["data", "meta"],
+        properties: {
+          data: { $ref: "#/components/schemas/AuthenticatedContext" },
+          meta: { $ref: "#/components/schemas/ResponseMeta" }
+        },
+        additionalProperties: false
+      },
+      LogoutResult: {
+        type: "object",
+        required: ["success"],
+        properties: {
+          success: { type: "boolean" }
+        },
+        additionalProperties: false
+      },
+      LogoutEnvelope: {
+        type: "object",
+        required: ["data", "meta"],
+        properties: {
+          data: { $ref: "#/components/schemas/LogoutResult" },
+          meta: { $ref: "#/components/schemas/ResponseMeta" }
         },
         additionalProperties: false
       }

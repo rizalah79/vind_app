@@ -21,6 +21,8 @@ import {
   generateRequestId,
   resolveRequestIdHeader
 } from "./request-id.js";
+import { registerAuthRoutes } from "./auth/auth-routes.js";
+import { type SessionStore } from "./auth/session.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -30,6 +32,7 @@ declare module "fastify" {
 
 export interface BuildAppOptions {
   readinessDependencies?: readonly ReadinessDependency[];
+  sessionStore?: SessionStore;
 }
 
 function getProblemInstance(request: FastifyRequest): string {
@@ -128,6 +131,8 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   });
 
   app.get("/api/v1/openapi.json", async () => openApiDocument);
+
+  registerAuthRoutes(app, { sessionStore: options.sessionStore });
 
   return app;
 }
