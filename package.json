@@ -1,31 +1,37 @@
 {
-    "name":  "vind-app",
-    "version":  "0.0.0",
-    "private":  true,
-    "workspaces":  [
-                       "packages/*"
-                   ],
-    "engines":  {
-                    "node":  "\u003e=22.12.0 \u003c23"
-                },
-    "packageManager":  "npm@9.7.2",
-    "scripts":  {
-                    "db:validate":  "npm run prisma:validate --workspace @vind/database",
-                    "db:format":  "npm run prisma:format --workspace @vind/database",
-                    "db:generate":  "npm run prisma:generate --workspace @vind/database",
-                    "db:build":  "npm run build --workspace @vind/database",
-                    "db:check":  "npm run check --workspace @vind/database",
-                    "db:migrate":  "npm run migrate --workspace @vind/database",
-                    "db:migrate:status":  "npm run migrate:status --workspace @vind/database",
-                    "db:introspect":  "npm run prisma:pull --workspace @vind/database",
-                    "db:seed:smk":  "npm run seed:smk --workspace @vind/database",
-                    "db:seed:smk:verify":  "npm run seed:smk:verify --workspace @vind/database",
-                    "db:seed:smk:cleanup":  "npm run seed:smk:cleanup --workspace @vind/database --",
-                    "db:seed:dec021":  "npm run seed:dec021 --workspace @vind/database",
-                    "db:seed:dec021:verify":  "npm run seed:dec021:verify --workspace @vind/database",
-                    "db:test:dec021": "npm run test:dec021 --workspace @vind/database",
-                    "media:fixtures:bootstrap": "node scripts/bootstrap-synthetic-demo-media.mjs",
-                    "media:fixtures:verify": "node scripts/verify-synthetic-demo-media.mjs",
-                    "test": "npm run db:check && npm run db:test:dec021"
-                }
+  "name": "vind-app",
+  "version": "0.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.12.0 <23"
+  },
+  "packageManager": "npm@9.7.2",
+  "scripts": {
+    "build": "npm run build --workspace @vind/contracts && npm run db:check && npm run build --workspace @vind/api",
+    "typecheck": "npm run typecheck --workspace @vind/contracts && npm run db:check && npm run typecheck --workspace @vind/api",
+    "test": "npm run test:all",
+    "test:b1": "npm run test --workspace @vind/contracts && npm run test --workspace @vind/api",
+    "test:db": "npm run db:check && npm run db:test:dec021",
+    "test:all": "npm run test:b1 && npm run test:db",
+    "db:validate": "npm run prisma:validate --workspace @vind/database",
+    "db:format": "npm run prisma:format --workspace @vind/database",
+    "db:generate": "npm run prisma:generate --workspace @vind/database",
+    "db:build": "npm run build --workspace @vind/database",
+    "db:check": "npm run prisma:validate --workspace @vind/database && npm run prisma:generate --workspace @vind/database && npm run build --workspace @vind/database",
+    "db:migrate": "npm run migrate --workspace @vind/database",
+    "db:migrate:status": "npm run migrate:status --workspace @vind/database",
+    "db:introspect": "npm run prisma:pull --workspace @vind/database",
+    "db:seed:smk": "npm run seed:smk --workspace @vind/database",
+    "db:seed:smk:verify": "npm run seed:smk:verify --workspace @vind/database",
+    "db:seed:smk:cleanup": "npm run seed:smk:cleanup --workspace @vind/database --",
+    "db:seed:dec021": "npm run seed:dec021 --workspace @vind/database",
+    "db:seed:dec021:verify": "npm run seed:dec021:verify --workspace @vind/database",
+    "db:test:dec021": "npm run test:dec021 --workspace @vind/database",
+    "media:fixtures:bootstrap": "node scripts/bootstrap-synthetic-demo-media.mjs",
+    "media:fixtures:verify": "node scripts/verify-synthetic-demo-media.mjs"
+  }
 }

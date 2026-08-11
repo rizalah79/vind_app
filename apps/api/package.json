@@ -1,0 +1,24 @@
+{
+  "name": "@vind/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/server.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "typecheck": "tsc -p tsconfig.typecheck.json",
+    "test": "node --import tsx --test \"src/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@vind/contracts": "0.0.0",
+    "@vind/database": "0.0.0",
+    "fastify": "5.11.3"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.2",
+    "tsx": "4.23.7",
+    "typescript": "5.9.3"
+  }
+}
