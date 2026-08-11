@@ -183,6 +183,7 @@ model retention_classes {
   persons                   persons[]
   consent_receipts          consent_receipts[]
   retention_policy_versions retention_policy_versions[]
+  auth_sessions             auth_sessions[]
   subject_requests          subject_requests[]
   provider_profiles         provider_profiles[]
   data_access_logs          data_access_logs[]
@@ -463,6 +464,7 @@ model scoped_assignments {
   persons_scoped_assignments_scope_person_idTopersons   persons?           @relation("scoped_assignments_scope_person_idTopersons", fields: [scope_person_id], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "scoped_assignments_scope_person_fk")
   persons_scoped_assignments_subject_person_idTopersons persons            @relation("scoped_assignments_subject_person_idTopersons", fields: [subject_person_id], references: [id], onUpdate: NoAction, map: "scoped_assignments_subject_person_fk")
   workspaces                                            workspaces?        @relation(fields: [workspace_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  auth_sessions                                         auth_sessions[]
 
   @@index([membership_id, status], map: "scoped_assignments_membership_idx")
   @@index([organization_id, status], map: "scoped_assignments_organization_status_idx", where: raw("(organization_id IS NOT NULL)"))
@@ -564,6 +566,7 @@ model accounts {
   retention_classes        retention_classes          @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
   import_batches           import_batches?            @relation(fields: [source_import_batch_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
   identity_links           identity_links?
+  auth_sessions            auth_sessions[]
 
   @@index([data_origin_code], map: "accounts_data_origin_idx")
   @@schema("identity")
@@ -589,10 +592,46 @@ model identity_links {
   accounts             accounts          @relation(fields: [account_id], references: [id], onUpdate: NoAction)
   persons              persons           @relation(fields: [person_id], references: [id], onUpdate: NoAction)
   retention_classes    retention_classes @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+  auth_sessions        auth_sessions[]
 
   @@unique([account_id, person_id, issuer], map: "identity_links_account_person_issuer_unique")
   @@unique([issuer, subject], map: "identity_links_external_subject_unique")
   @@index([person_id], map: "identity_links_person_idx")
+  @@schema("identity")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model auth_sessions {
+  id                       String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  account_id               String                    @db.Uuid
+  identity_link_id         String?                   @db.Uuid
+  authority_plane          String
+  local_assignment_id      String?                   @db.Uuid
+  platform_assignment_id   String?                   @db.Uuid
+  service_grant_id         String?                   @db.Uuid
+  token_digest             Bytes                     @unique
+  auth_assurance_level     String
+  step_up_verified_at      DateTime?                 @db.Timestamptz(6)
+  authenticated_at         DateTime                  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  last_activity_at         DateTime                  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  absolute_expires_at      DateTime                  @db.Timestamptz(6)
+  revoked_at               DateTime?                 @db.Timestamptz(6)
+  revocation_reason_code   String?
+  rotated_from_session_id  String?                   @db.Uuid
+  retention_class_code     String                    @default("EPH")
+  created_at               DateTime                  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at               DateTime                  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  accounts                 accounts                  @relation(fields: [account_id], references: [id], onUpdate: NoAction)
+  identity_links           identity_links?           @relation(fields: [identity_link_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  scoped_assignments       scoped_assignments?       @relation(fields: [local_assignment_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  platform_assignments     platform_assignments?     @relation(fields: [platform_assignment_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  service_principal_grants service_principal_grants? @relation(fields: [service_grant_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  rotated_from_session     auth_sessions?            @relation("auth_sessions_rotation", fields: [rotated_from_session_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  rotated_to_sessions      auth_sessions[]           @relation("auth_sessions_rotation")
+  retention_classes        retention_classes         @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([account_id], map: "idx_auth_sessions_account_id")
   @@schema("identity")
 }
 
@@ -793,6 +832,7 @@ model platform_assignments {
   retention_classes                                           retention_classes @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
   roles                                                       roles             @relation(fields: [role_code], references: [code])
   persons_platform_assignments_subject_person_idTopersons     persons           @relation("platform_assignments_subject_person_idTopersons", fields: [subject_person_id], references: [id], onUpdate: NoAction)
+  auth_sessions                                               auth_sessions[]
 
   @@index([channel_id, status], map: "platform_assignments_channel_idx", where: raw("(channel_id IS NOT NULL)"))
   @@index([region_id, status], map: "platform_assignments_region_idx", where: raw("(region_id IS NOT NULL)"))
@@ -824,6 +864,7 @@ model service_principal_grants {
   regions              regions?          @relation(fields: [region_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
   retention_classes    retention_classes @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
   accounts             accounts          @relation(fields: [subject_account_id], references: [id], onUpdate: NoAction)
+  auth_sessions        auth_sessions[]
 
   @@index([subject_account_id, status], map: "service_principal_grants_account_idx")
   @@index([capability_code, status], map: "service_principal_grants_capability_idx")
