@@ -1,25 +1,25 @@
 import type { DatabaseClient } from "@vind/database";
 
 export interface RequestContextV2Params {
-  actorAccountKey?: string | null;
-  actorPersonKey?: string | null;
+  actorAccountKey?: string | null | undefined;
+  actorPersonKey?: string | null | undefined;
   actorKind: "HUMAN" | "SERVICE";
   authorityPlane: "RELATIONSHIP" | "LOCAL" | "PLATFORM" | "SERVICE";
-  membershipKey?: string | null;
-  localAssignmentKey?: string | null;
-  platformAssignmentKey?: string | null;
-  serviceGrantKey?: string | null;
-  organizationKey?: string | null;
-  workspaceKey?: string | null;
-  providerKey?: string | null;
-  channelCode?: string | null;
-  regionKey?: string | null;
-  purposeCode?: string | null;
-  correlationId?: string | null;
-  requestId?: string | null;
-  authAssuranceLevel?: string | null;
+  membershipKey?: string | null | undefined;
+  localAssignmentKey?: string | null | undefined;
+  platformAssignmentKey?: string | null | undefined;
+  serviceGrantKey?: string | null | undefined;
+  organizationKey?: string | null | undefined;
+  workspaceKey?: string | null | undefined;
+  providerKey?: string | null | undefined;
+  channelCode?: string | null | undefined;
+  regionKey?: string | null | undefined;
+  purposeCode?: string | null | undefined;
+  correlationId?: string | null | undefined;
+  requestId?: string | null | undefined;
+  authAssuranceLevel?: string | null | undefined;
   stepUpVerified?: boolean;
-  breakGlassReference?: string | null;
+  breakGlassReference?: string | null | undefined;
 }
 
 /**
@@ -35,10 +35,10 @@ export async function runWithRequestContextV2<T>(
   return db.$transaction(async (tx) => {
     try {
       // 1. Clear any residual connection context
-      await tx.$queryRawUnsafe(`SELECT security.clear_request_context()`);
+      await tx.$executeRawUnsafe(`SELECT security.clear_request_context()`);
 
       // 2. Set strict request context v2
-      await tx.$queryRawUnsafe(
+      await tx.$executeRawUnsafe(
         `SELECT security.set_request_context_v2(
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
           $11, $12, $13, $14, $15, $16, $17, $18, $19
@@ -69,7 +69,7 @@ export async function runWithRequestContextV2<T>(
     } finally {
       // 4. Clear request context on completion/error before releasing connection
       try {
-        await tx.$queryRawUnsafe(`SELECT security.clear_request_context()`);
+        await tx.$executeRawUnsafe(`SELECT security.clear_request_context()`);
       } catch {
         // Ignore cleanup failure in rollback
       }

@@ -3,25 +3,28 @@ import { randomBytes } from "node:crypto";
 export interface SessionData {
   sessionId: string;
   accountKey: string;
-  personKey: string;
+  personKey?: string | null;
   actorKind: "HUMAN" | "SERVICE";
   authorityPlane: "RELATIONSHIP" | "LOCAL" | "PLATFORM" | "SERVICE";
   authAssuranceLevel: string;
   stepUpVerified: boolean;
-  membershipKey?: string;
-  localAssignmentKey?: string;
-  platformAssignmentKey?: string;
-  serviceGrantKey?: string;
-  organizationKey?: string;
-  workspaceKey?: string;
-  providerKey?: string;
+  membershipKey?: string | null;
+  localAssignmentKey?: string | null;
+  platformAssignmentKey?: string | null;
+  serviceGrantKey?: string | null;
+  organizationKey?: string | null;
+  workspaceKey?: string | null;
+  providerKey?: string | null;
   createdAt: Date;
   expiresAt: Date;
   revokedAt: Date | null;
 }
 
 export interface SessionStore {
-  createSession(data: Omit<SessionData, "sessionId" | "createdAt" | "expiresAt" | "revokedAt">, ttlMs?: number): Promise<SessionData>;
+  createSession(
+    data: Omit<SessionData, "sessionId" | "createdAt" | "expiresAt" | "revokedAt">,
+    ttlMs?: number
+  ): Promise<SessionData>;
   getSession(sessionId: string): Promise<SessionData | null>;
   revokeSession(sessionId: string): Promise<boolean>;
   clear(): Promise<void>;
@@ -32,7 +35,7 @@ export class InMemorySessionStore implements SessionStore {
 
   async createSession(
     data: Omit<SessionData, "sessionId" | "createdAt" | "expiresAt" | "revokedAt">,
-    ttlMs: number = 86400000 // 24 hours default
+    ttlMs: number = 86400000 // 24 hours
   ): Promise<SessionData> {
     const sessionId = `vses_${randomBytes(24).toString("hex")}`;
     const now = new Date();
@@ -51,7 +54,6 @@ export class InMemorySessionStore implements SessionStore {
   async getSession(sessionId: string): Promise<SessionData | null> {
     const session = this.sessions.get(sessionId);
     if (!session) return null;
-
     if (session.revokedAt) return null;
     if (session.expiresAt.getTime() <= Date.now()) return null;
 
@@ -73,27 +75,22 @@ export class InMemorySessionStore implements SessionStore {
 
 export const defaultSessionStore = new InMemorySessionStore();
 
-export function parseSessionToken(headers: Record<string, string | string[] | undefined>): string | null {
-  // 1. Check Authorization: Bearer <token>
-  const authHeader = headers["authorization"];
-  if (typeof authHeader === "string" && authHeader.startsWith("Bearer ")) {
-    const token = authHeader.slice(7).trim();
-    if (token) return token;
-  }
+export const sessionCookieName = "vind_session" as const;
 
-  // 2. Check Cookie header for vind_session=...
+/**
+ * Extracts session token exclusively from the canonical HttpOnly cookie `vind_session`.
+ * Bearer header session parsing is intentionally excluded for Stage-1 opaque cookie security.
+ */
+export function parseSessionCookieToken(headers: Record<string, string | string[] | undefined>): string | null {
   const cookieHeader = headers["cookie"];
   if (typeof cookieHeader === "string") {
     const match = cookieHeader.match(/(?:^|;\s*)vind_session=([^;]+)/);
     if (match && match[1]) {
-      return decodeURIComponent(match[1]);
+      return decodeURIComponent(match[1].trim());
     }
   }
-
   return null;
 }
-
-export const sessionCookieName = "vind_session" as const;
 
 export function buildSessionCookieHeader(sessionId: string): string {
   return `${sessionCookieName}=${encodeURIComponent(sessionId)}; Path=/api/v1; HttpOnly; Secure; SameSite=Lax`;
