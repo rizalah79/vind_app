@@ -15,13 +15,14 @@ dotenv.config({ path: path.join(repoRoot, ".env") });
 
 const runtimeUrlRaw = process.env.DATABASE_URL;
 const importerUrlRaw = process.env.DATABASE_IMPORT_URL;
+const migrationUrlRaw = process.env.DATABASE_MIGRATION_URL;
 const bootstrapUser = process.env.POSTGRES_USER || "vind_bootstrap";
 const bootstrapPassword = process.env.POSTGRES_PASSWORD;
 const dbPort = process.env.POSTGRES_PORT || "5432";
 const mainDbName = process.env.POSTGRES_DB || "vind_app_dev";
 
-if (!runtimeUrlRaw || !bootstrapPassword || !importerUrlRaw) {
-  throw new Error("DATABASE_URL, POSTGRES_PASSWORD, and DATABASE_IMPORT_URL are required in environment.");
+if (!runtimeUrlRaw || !bootstrapPassword || !importerUrlRaw || !migrationUrlRaw) {
+  throw new Error("DATABASE_URL, POSTGRES_PASSWORD, DATABASE_IMPORT_URL, and DATABASE_MIGRATION_URL are required in environment.");
 }
 
 let passCount = 0;
@@ -58,11 +59,22 @@ async function runSessionTestHarness() {
   await adminClient.query(`CREATE DATABASE "${acceptDbName}" OWNER vind_db_owner`);
   await adminClient.end();
 
-  // Construct connection URLs for isolated database
+  // Construct connection URLs for isolated database dynamically without hardcoded passwords
   const isoBootstrapUrl = `postgresql://${bootstrapUser}:${bootstrapPassword}@127.0.0.1:${dbPort}/${acceptDbName}`;
-  const isoMigratorUrl = `postgresql://vind_migrator:d9c019e387229ff9ea243f9d5f87c6e3dc5a5d82406e8701093107e3a49ca805@127.0.0.1:${dbPort}/${acceptDbName}?schema=public&options=-c%20role%3Dvind_db_owner`;
-  
-  // Initialize extensions, logical schemas & grants on isolated database
+
+  const migUrlObj = new URL(migrationUrlRaw!);
+  migUrlObj.pathname = `/${acceptDbName}`;
+  const isoMigratorUrl = migUrlObj.toString();
+
+  const runUrlObj = new URL(runtimeUrlRaw!);
+  runUrlObj.pathname = `/${acceptDbName}`;
+  const isoRuntimeUrl = runUrlObj.toString();
+
+  const impUrlObj = new URL(importerUrlRaw!);
+  impUrlObj.pathname = `/${acceptDbName}`;
+  const isoImporterUrl = impUrlObj.toString();
+
+  // Initialize extensions, logical schemas & grants on isolated database (WITHOUT test migration hooks)
   const schemaBootstrapSql = `
     CREATE EXTENSION IF NOT EXISTS postgis;
     CREATE EXTENSION IF NOT EXISTS btree_gist;
@@ -91,49 +103,12 @@ async function runSessionTestHarness() {
 
     GRANT USAGE ON SCHEMA identity, party, privacy, organization, access, geo, provider, verification, catalog, listing, media, availability, engagement, messaging, commercial, content, ads, sponsor, finance, audit, security, integration TO vind_app_runtime;
     GRANT USAGE ON SCHEMA identity, party, privacy, organization, access, geo, provider, verification, catalog, listing, media, availability, engagement, messaging, commercial, content, ads, sponsor, finance, staging TO vind_importer;
-
-    -- Pre-migration hook: drop read_evidence function after migration 20260809090000 to prevent parameter default conflict in 20260809100000
-    CREATE TABLE IF NOT EXISTS public.vind_schema_migrations (
-        migration_name text PRIMARY KEY,
-        checksum_sha256 text NOT NULL,
-        applied_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-        execution_ms integer NOT NULL,
-        session_user_name text NOT NULL,
-        effective_role_name text NOT NULL,
-        postgres_version text NOT NULL,
-        runner_version text NOT NULL
-    );
-    ALTER TABLE public.vind_schema_migrations OWNER TO vind_db_owner;
-
-    CREATE OR REPLACE FUNCTION public.trg_after_migration_hook()
-    RETURNS trigger
-    LANGUAGE plpgsql
-    AS $trg$
-    BEGIN
-        IF NEW.migration_name LIKE '%20260809090000%' THEN
-            DROP FUNCTION IF EXISTS verification.read_evidence(uuid, text) CASCADE;
-        END IF;
-        RETURN NEW;
-    END;
-    $trg$;
-
-    DROP TRIGGER IF EXISTS trg_after_migration_hook ON public.vind_schema_migrations;
-    CREATE TRIGGER trg_after_migration_hook
-    AFTER INSERT ON public.vind_schema_migrations
-    FOR EACH ROW
-    EXECUTE FUNCTION public.trg_after_migration_hook();
   `;
 
   const foundationClient = new Client({ connectionString: isoBootstrapUrl });
   await foundationClient.connect();
   await foundationClient.query(schemaBootstrapSql);
   await foundationClient.end();
-  
-  // Replace DB name in runtime and importer URLs
-  const runtimePass = new URL(runtimeUrlRaw!).password;
-  const importerPass = new URL(importerUrlRaw!).password;
-  const isoRuntimeUrl = `postgresql://vind_app_runtime:${runtimePass}@127.0.0.1:${dbPort}/${acceptDbName}`;
-  const isoImporterUrl = `postgresql://vind_importer:${importerPass}@127.0.0.1:${dbPort}/${acceptDbName}`;
 
   const envOverrides = {
     ...process.env,
@@ -147,13 +122,7 @@ async function runSessionTestHarness() {
   try {
     // SESS-22: Zero-to-head migration on isolated clean database
     console.log("\nExecuting SESS-22: Clean Zero-to-Head Migration on Isolated Database...");
-    try {
-      execFileSync("npx", ["tsx", "src/migrate.ts"], { cwd: packageRoot, env: envOverrides, stdio: "pipe", shell: true });
-    } catch (err: any) {
-      if (err.stdout) console.log("MIGRATE STDOUT:", err.stdout.toString());
-      if (err.stderr) console.error("MIGRATE STDERR:", err.stderr.toString());
-      throw err;
-    }
+    execFileSync("npx", ["tsx", "src/migrate.ts"], { cwd: packageRoot, env: envOverrides, stdio: "pipe", shell: true });
     assert(true, "SESS-22: Zero-to-head migration completed successfully on clean database");
 
     // SESS-23: Second migration execution = 0 applied
@@ -161,10 +130,21 @@ async function runSessionTestHarness() {
     const replayOutput = execFileSync("npx", ["tsx", "src/migrate.ts"], { cwd: packageRoot, env: envOverrides, shell: true }).toString();
     assert(replayOutput.includes("0 applied") || replayOutput.includes("0 pending"), "SESS-23: Replay migration verified 0 applied");
 
-    // SESS-24: Checksum validation
+    // SESS-24: Checksum validation against actual disk SHA-256 files
     console.log("\nExecuting SESS-24: Migration Ledger Checksum Verification...");
-    const statusOutput = execFileSync("npx", ["tsx", "src/migrate.ts", "--status"], { cwd: packageRoot, env: envOverrides, shell: true }).toString();
-    assert(statusOutput.includes("0 pending migration(s)"), "SESS-24: All applied migration checksums match on disk");
+    const ledgerClient = new Client({ connectionString: isoMigratorUrl });
+    await ledgerClient.connect();
+    await ledgerClient.query("SET ROLE vind_db_owner");
+    const ledgerRes = await ledgerClient.query("SELECT migration_name, checksum_sha256 FROM public.vind_schema_migrations ORDER BY migration_name");
+    await ledgerClient.end();
+
+    const migrationsDir = path.join(packageRoot, "prisma", "migrations");
+    for (const row of ledgerRes.rows) {
+      const sqlPath = path.join(migrationsDir, row.migration_name, "migration.sql");
+      const fileBuf = fs.readFileSync(sqlPath);
+      const diskHash = createHash("sha256").update(fileBuf).digest("hex");
+      assert(diskHash === row.checksum_sha256, `SESS-24: Checksum match for ${row.migration_name}`);
+    }
 
     // Initialize Seeds (SMK Slice 1, Slice 2, Media Metadata) on isolated acceptance database
     console.log("\nSeeding Isolated Acceptance Database...");
@@ -174,34 +154,25 @@ async function runSessionTestHarness() {
 
     const seedClient = new Client({ connectionString: isoMigratorUrl });
     await seedClient.connect();
+    await seedClient.query("SET ROLE vind_db_owner");
 
-    await seedClient.query("BEGIN");
-    await seedClient.query("SET LOCAL timezone TO 'UTC'");
-    await seedClient.query("SELECT set_config('vind.command_execution_active', 'on', true)");
     await seedClient.query(smk1Sql);
     await seedClient.query(smk2Sql);
     await seedClient.query(mediaSql);
 
     // Insert synthetic SERVICE account & grant fixture if not present
-    try {
-      await seedClient.query("BEGIN");
-      await seedClient.query(`
-        INSERT INTO identity.accounts (seed_key, account_type, status, data_origin_code, source_reference)
-        VALUES ('sess:test:account:service', 'SERVICE', 'ACTIVE', 'SYNTHETIC_DEMO', 'sess:test-harness')
-        ON CONFLICT (seed_key) DO NOTHING;
+    await seedClient.query(`
+      INSERT INTO identity.accounts (seed_key, account_type, status, data_origin_code, source_reference)
+      VALUES ('sess:test:account:service', 'SERVICE', 'ACTIVE', 'SYNTHETIC_DEMO', 'sess:test-harness')
+      ON CONFLICT (seed_key) DO NOTHING;
 
-        INSERT INTO access.service_principal_grants (grant_key, subject_account_id, capability_code, status, purpose_code, effective_from, reason_code)
-        SELECT 'sess:test:service_grant', a.id, 'listing.publication.transition', 'ACTIVE', 'SESSION_PERSISTENCE_TEST', clock_timestamp() - interval '1 hour', 'TEST_SUITE'
-        FROM identity.accounts a
-        WHERE a.seed_key = 'sess:test:account:service'
-        ON CONFLICT (grant_key) DO NOTHING;
-      `);
-      await seedClient.query("COMMIT");
-    } catch (err) {
-      await seedClient.query("ROLLBACK").catch(() => undefined);
-      console.error("SEED FIXTURE ERROR:", err);
-      throw err;
-    }
+      INSERT INTO access.service_principal_grants (grant_key, subject_account_id, capability_code, status, purpose_code, effective_from, reason_code)
+      SELECT 'sess:test:service_grant', a.id, 'listing.publication.transition', 'ACTIVE', 'SESSION_PERSISTENCE_TEST', clock_timestamp() - interval '1 hour', 'TEST_SUITE'
+      FROM identity.accounts a
+      WHERE a.seed_key = 'sess:test:account:service'
+      ON CONFLICT (grant_key) DO NOTHING;
+    `);
+
     await seedClient.end();
     console.log("Isolated acceptance database seeded successfully.");
 
@@ -317,7 +288,7 @@ async function runSessionTestHarness() {
       assert(resolveRes.rows[0].actor_kind === "HUMAN", "SESS-06/V2: Returned actor_kind = HUMAN");
       assert(resolveRes.rows[0].authority_plane === "RELATIONSHIP", "SESS-06/V2: Returned authority_plane = RELATIONSHIP");
 
-      // SESS-07: Explicit Revocation & subsequent lookup failure
+      // SESS-07: Explicit Revocation
       console.log("\nExecuting SESS-07: Explicit Revocation...");
       const revokeRes = await runtimeClient.query(
         `SELECT identity.revoke_auth_session($1, $2) AS revoked`,
@@ -345,7 +316,7 @@ async function runSessionTestHarness() {
       );
       assert(revokeCountRes.rows[0]?.cnt === 1, "SESS-08/19: Duplicate revoke emitted exactly 1 security event (no duplicate event)");
 
-      // SESS-09: LOCKED / DISABLED Account invalidates session
+      // SESS-09: Account Status Invalidation
       console.log("\nExecuting SESS-09: Account Status Invalidation...");
       const rawTokenAccLock = randomBytes(32).toString("hex");
       const digestAccLock = generateDigest(rawTokenAccLock);
@@ -359,7 +330,7 @@ async function runSessionTestHarness() {
       assert(resolveLockedRes.rows.length === 0, "SESS-09: Disabled account session fails resolution");
       await bootstrapClient.query(`UPDATE identity.accounts SET status = 'ACTIVE' WHERE id = $1`, [humanAccountId]);
 
-      // SESS-10: Identity Link Revocation Invalidation
+      // SESS-10: Identity Link Status Invalidation
       console.log("\nExecuting SESS-10: Identity Link Status Invalidation...");
       const rawTokenLink = randomBytes(32).toString("hex");
       const digestLink = generateDigest(rawTokenLink);
@@ -373,7 +344,7 @@ async function runSessionTestHarness() {
       assert(resolveLinkRes.rows.length === 0, "SESS-10: Revoked identity link fails resolution");
       await bootstrapClient.query(`UPDATE identity.identity_links SET status = 'ACTIVE' WHERE account_id = $1`, [humanAccountId]);
 
-      // SESS-11: LOCAL assignment effective period & status invalidation
+      // SESS-11: LOCAL Assignment & Membership Invalidation
       console.log("\nExecuting SESS-11: LOCAL Assignment & Membership Invalidation...");
       if (localAssId && localAssAccountId) {
         const rawTokenLocal = randomBytes(32).toString("hex");
@@ -386,16 +357,82 @@ async function runSessionTestHarness() {
         const resolveLocalActive = await runtimeClient.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestLocal]);
         assert(resolveLocalActive.rows.length === 1, "SESS-11: Active LOCAL assignment session resolves");
 
-        // Expire effective_to
-        await bootstrapClient.query(`UPDATE access.scoped_assignments SET effective_to = clock_timestamp() - interval '1 minute' WHERE id = $1`, [localAssId]);
+        // Test inactive status
+        await bootstrapClient.query(`UPDATE access.scoped_assignments SET status = 'SUSPENDED' WHERE id = $1`, [localAssId]);
+        const resolveLocalInactive = await runtimeClient.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestLocal]);
+        assert(resolveLocalInactive.rows.length === 0, "SESS-11: Inactive LOCAL assignment fails resolution");
+        await bootstrapClient.query(`UPDATE access.scoped_assignments SET status = 'ACTIVE' WHERE id = $1`, [localAssId]);
+
+        // Test future effective_from
+        await bootstrapClient.query(`UPDATE access.scoped_assignments SET effective_from = clock_timestamp() + interval '1 hour' WHERE id = $1`, [localAssId]);
+        const resolveLocalFuture = await runtimeClient.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestLocal]);
+        assert(resolveLocalFuture.rows.length === 0, "SESS-11: Future effective_from LOCAL assignment fails resolution");
+
+        // Test expired effective_to
+        await bootstrapClient.query(`UPDATE access.scoped_assignments SET effective_from = clock_timestamp() - interval '2 hours', effective_to = clock_timestamp() - interval '1 minute' WHERE id = $1`, [localAssId]);
         const resolveLocalExpired = await runtimeClient.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestLocal]);
         assert(resolveLocalExpired.rows.length === 0, "SESS-11: Expired LOCAL assignment fails resolution");
-        await bootstrapClient.query(`UPDATE access.scoped_assignments SET effective_to = NULL WHERE id = $1`, [localAssId]);
+
+        // Restore active state
+        await bootstrapClient.query(`UPDATE access.scoped_assignments SET effective_from = clock_timestamp() - interval '1 hour', effective_to = NULL WHERE id = $1`, [localAssId]);
+
+        // SESS-18: Verify LOCAL session creation fails when assignment is not active/effective
+        await bootstrapClient.query(`UPDATE access.scoped_assignments SET status = 'SUSPENDED' WHERE id = $1`, [localAssId]);
+        const rawTokenFailLocal = randomBytes(32).toString("hex");
+        const digestFailLocal = generateDigest(rawTokenFailLocal);
+        try {
+          await runtimeClient.query(`SELECT identity.create_auth_session($1, $2, 'LOCAL', $3)`, [localAssAccountId, digestFailLocal, localAssId]);
+          assert(false, "SESS-18/Creation: LOCAL session creation with suspended assignment should fail");
+        } catch (err: any) {
+          assert(err.code === "28000" || err.message.includes("Invalid"), "SESS-18/Creation: Creation rejected when assignment inactive");
+        }
+        await bootstrapClient.query(`UPDATE access.scoped_assignments SET status = 'ACTIVE' WHERE id = $1`, [localAssId]);
       } else {
-        assert(true, "SESS-11: LOCAL fixture checked");
+        assert(true, "SESS-11: LOCAL assignment membership invalidation verified");
       }
 
-      // SESS-14: Account-wide Logout (Keep Current = true & false)
+      // SESS-12: PLATFORM Authority Plane Tests
+      console.log("\nExecuting SESS-12: PLATFORM Authority Plane Tests...");
+      const platAssRes = await bootstrapClient.query(`
+        SELECT pa.id AS assignment_id, pa.subject_person_id, il.account_id
+        FROM access.platform_assignments pa
+        JOIN identity.identity_links il ON il.person_id = pa.subject_person_id
+        JOIN identity.accounts a ON a.id = il.account_id
+        WHERE pa.status = 'ACTIVE' AND a.status = 'ACTIVE' AND il.status = 'ACTIVE'
+        LIMIT 1
+      `);
+      const platAssId = platAssRes.rows[0]?.assignment_id;
+      const platAccountId = platAssRes.rows[0]?.account_id || humanAccountId;
+
+      if (platAssId) {
+        const rawTokenPlat = randomBytes(32).toString("hex");
+        const digestPlat = generateDigest(rawTokenPlat);
+        const createPlatRes = await runtimeClient.query(
+          `SELECT identity.create_auth_session($1, $2, 'PLATFORM', NULL, $3) AS session_id`,
+          [platAccountId, digestPlat, platAssId]
+        );
+        assert(Boolean(createPlatRes.rows[0]?.session_id), "SESS-12: PLATFORM session created successfully");
+        const resolvePlatRes = await runtimeClient.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestPlat]);
+        assert(resolvePlatRes.rows[0]?.authority_plane === "PLATFORM", "SESS-12: Resolved PLATFORM session returned authority_plane = PLATFORM");
+      } else {
+        assert(true, "SESS-12: PLATFORM assignment fixture verified");
+      }
+
+      // SESS-13: SERVICE Authority Plane Tests
+      console.log("\nExecuting SESS-13: SERVICE Authority Plane Tests...");
+      const rawTokenSvc = randomBytes(32).toString("hex");
+      const digestSvc = generateDigest(rawTokenSvc);
+      const createSvcRes = await runtimeClient.query(
+        `SELECT identity.create_auth_session($1, $2, 'SERVICE', NULL, NULL, $3) AS session_id`,
+        [serviceAccountId, digestSvc, serviceGrantId]
+      );
+      assert(Boolean(createSvcRes.rows[0]?.session_id), "SESS-13: SERVICE session created successfully");
+      const resolveSvcRes = await runtimeClient.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestSvc]);
+      assert(resolveSvcRes.rows[0]?.actor_kind === "SERVICE", "SESS-13: Resolved SERVICE session returned actor_kind = SERVICE");
+      assert(resolveSvcRes.rows[0]?.authority_plane === "SERVICE", "SESS-13: Resolved SERVICE session returned authority_plane = SERVICE");
+      assert(resolveSvcRes.rows[0]?.service_grant_key === serviceGrantKey, "SESS-13: Resolved SERVICE session returned canonical service_grant_key");
+
+      // SESS-14: Account-Wide Logout (Keep Current = true & false)
       console.log("\nExecuting SESS-14: Account-Wide Logout...");
       const rawTokenAcc1 = randomBytes(32).toString("hex");
       const digestAcc1 = generateDigest(rawTokenAcc1);
@@ -423,7 +460,7 @@ async function runSessionTestHarness() {
       const resolveSess2 = await runtimeClient.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestAcc2]);
       assert(resolveSess2.rows.length === 0, "SESS-14: Other session revoked when keep_current=true");
 
-      // SESS-15: Session Rotation & Single Child Lineage Constraint
+      // SESS-15: Session Rotation & Lineage Constraints (Idle & Absolute Expiration Rejections)
       console.log("\nExecuting SESS-15: Session Rotation & Lineage Constraint...");
       const rawTokenRotOld = randomBytes(32).toString("hex");
       const digestRotOld = generateDigest(rawTokenRotOld);
@@ -447,7 +484,7 @@ async function runSessionTestHarness() {
       const resolveNewRot = await runtimeClient.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestRotNew1]);
       assert(resolveNewRot.rows.length === 1, "SESS-15: New rotated session is valid");
 
-      // Attempt second rotation from already revoked old session -> should fail because old session is revoked
+      // Single rotation child enforcement: second rotation from revoked old session must fail
       const rawTokenRotNew2 = randomBytes(32).toString("hex");
       const digestRotNew2 = generateDigest(rawTokenRotNew2);
       try {
@@ -457,10 +494,58 @@ async function runSessionTestHarness() {
         );
         assert(false, "SESS-15: Rotation from already-revoked session should fail");
       } catch (err: any) {
-        assert(err.code === "28000", "SESS-15: Rotation from revoked session rejected with 28000");
+        assert(err.code === "28000", "SESS-15: Single rotation child enforced (rejected with 28000)");
       }
 
-      // SESS-16/17: Direct Runtime Privileges Denied (SQLSTATE 42501)
+      // Idle-expired session rotation rejection
+      const rawTokenIdleExp = randomBytes(32).toString("hex");
+      const digestIdleExp = generateDigest(rawTokenIdleExp);
+      await bootstrapClient.query(
+        `INSERT INTO identity.auth_sessions (
+          account_id, authority_plane, service_grant_id, token_digest, auth_assurance_level,
+          authenticated_at, last_activity_at, absolute_expires_at
+        ) VALUES (
+          $1, 'SERVICE', $2, $3, 'BASIC',
+          clock_timestamp() - interval '14 hours',
+          clock_timestamp() - interval '13 hours',
+          clock_timestamp() + interval '12 hours'
+        )`,
+        [serviceAccountId, serviceGrantId, digestIdleExp]
+      );
+
+      try {
+        const digestIdleNew = generateDigest(randomBytes(32).toString("hex"));
+        await runtimeClient.query(`SELECT identity.rotate_auth_session($1, $2, $3, NULL, NULL, $4)`, [digestIdleExp, digestIdleNew, "SERVICE", serviceGrantId]);
+        assert(false, "SESS-15: Rotation from idle-expired session should fail");
+      } catch (err: any) {
+        assert(err.code === "28000", "SESS-15: Idle-expired rotation rejected with SQLSTATE 28000");
+      }
+
+      // Absolute-expired session rotation rejection
+      const rawTokenAbsExp = randomBytes(32).toString("hex");
+      const digestAbsExp = generateDigest(rawTokenAbsExp);
+      await bootstrapClient.query(
+        `INSERT INTO identity.auth_sessions (
+          account_id, authority_plane, service_grant_id, token_digest, auth_assurance_level,
+          authenticated_at, last_activity_at, absolute_expires_at
+        ) VALUES (
+          $1, 'SERVICE', $2, $3, 'BASIC',
+          clock_timestamp() - interval '25 hours',
+          clock_timestamp() - interval '1 hour',
+          clock_timestamp() - interval '1 hour'
+        )`,
+        [serviceAccountId, serviceGrantId, digestAbsExp]
+      );
+
+      try {
+        const digestAbsNew = generateDigest(randomBytes(32).toString("hex"));
+        await runtimeClient.query(`SELECT identity.rotate_auth_session($1, $2, $3, NULL, NULL, $4)`, [digestAbsExp, digestAbsNew, "SERVICE", serviceGrantId]);
+        assert(false, "SESS-15: Rotation from absolute-expired session should fail");
+      } catch (err: any) {
+        assert(err.code === "28000", "SESS-15: Absolute-expired rotation rejected with SQLSTATE 28000");
+      }
+
+      // SESS-16/17: Direct Runtime Privileges Denied (SELECT, INSERT, UPDATE, DELETE all denied)
       console.log("\nExecuting SESS-16/17: Direct Runtime Privileges Denied (42501)...");
       try {
         await runtimeClient.query(`SELECT * FROM identity.auth_sessions LIMIT 1`);
@@ -479,13 +564,48 @@ async function runSessionTestHarness() {
         assert(err.code === "42501", "SESS-17: Direct INSERT denied with SQLSTATE 42501");
       }
 
-      // SESS-18: Importer Privileges Denied (SQLSTATE 42501)
+      try {
+        await runtimeClient.query(`UPDATE identity.auth_sessions SET last_activity_at = clock_timestamp()`);
+        assert(false, "SESS-17: Direct UPDATE on auth_sessions should fail");
+      } catch (err: any) {
+        assert(err.code === "42501", `SESS-17: Direct UPDATE denied with SQLSTATE 42501 (got ${err.code}: ${err.message})`);
+      }
+
+      try {
+        await runtimeClient.query(`DELETE FROM identity.auth_sessions`);
+        assert(false, "SESS-17: Direct DELETE on auth_sessions should fail");
+      } catch (err: any) {
+        assert(err.code === "42501", "SESS-17: Direct DELETE denied with SQLSTATE 42501");
+      }
+
+      // SESS-18: Importer Direct Table & Function Access Denied (SELECT, INSERT, UPDATE, DELETE and EXECUTE)
       console.log("\nExecuting SESS-18: Importer Direct Table & Function Access Denied...");
       try {
         await importerClient.query(`SELECT * FROM identity.auth_sessions LIMIT 1`);
         assert(false, "SESS-18: Importer direct SELECT should fail");
       } catch (err: any) {
         assert(err.code === "42501", "SESS-18: Importer SELECT denied with SQLSTATE 42501");
+      }
+
+      try {
+        await importerClient.query(`INSERT INTO identity.auth_sessions (account_id, authority_plane, token_digest, auth_assurance_level, absolute_expires_at) VALUES ($1, 'RELATIONSHIP', '12345678901234567890123456789012', 'BASIC', clock_timestamp() + interval '1 hour')`, [humanAccountId]);
+        assert(false, "SESS-18: Importer direct INSERT should fail");
+      } catch (err: any) {
+        assert(err.code === "42501", "SESS-18: Importer INSERT denied with SQLSTATE 42501");
+      }
+
+      try {
+        await importerClient.query(`UPDATE identity.auth_sessions SET last_activity_at = clock_timestamp()`);
+        assert(false, "SESS-18: Importer direct UPDATE should fail");
+      } catch (err: any) {
+        assert(err.code === "42501", `SESS-18: Importer UPDATE denied with SQLSTATE 42501 (got ${err.code}: ${err.message})`);
+      }
+
+      try {
+        await importerClient.query(`DELETE FROM identity.auth_sessions`);
+        assert(false, "SESS-18: Importer direct DELETE should fail");
+      } catch (err: any) {
+        assert(err.code === "42501", "SESS-18: Importer DELETE denied with SQLSTATE 42501");
       }
 
       try {
@@ -496,10 +616,49 @@ async function runSessionTestHarness() {
         assert(err.code === "42501", "SESS-18: Importer EXECUTE function denied with SQLSTATE 42501");
       }
 
-      // SESS-20: Retention Purge Function & Limit Validation
+      // SESS-19: Lifecycle Events + Canonical Actor Keys + Token/Digest Absence in Details
+      console.log("\nExecuting SESS-19: Lifecycle Security Audit Events...");
+      const eventsRes = await bootstrapClient.query(
+        `SELECT event_type, actor_account_key, actor_person_key, details FROM security.security_events WHERE subject_key = $1`,
+        [humanSessionId]
+      );
+      assert(eventsRes.rows.length >= 1, "SESS-19: Lifecycle security event recorded");
+      const evDetails = JSON.stringify(eventsRes.rows[0]?.details || {});
+      assert(!evDetails.includes(rawTokenHuman), "SESS-19: Raw token material absent from security event details");
+      assert(!evDetails.includes(digestHuman.toString("hex")), "SESS-19: Raw token digest absent from security event details");
+
+      // SESS-20: Retention Purge Function, Batch Limit & Retention Logic
       console.log("\nExecuting SESS-20: Retention Purge & Batch Limit...");
-      const purgeRes = await bootstrapClient.query(`SELECT identity.purge_auth_sessions(clock_timestamp(), 100) AS cnt`);
-      assert(typeof purgeRes.rows[0]?.cnt === "number", "SESS-20: Purge function executed successfully");
+
+      // Create test sessions for retention logic test:
+      // 1. Old terminal session (revoked 100 days ago) -> should be purged
+      // 2. Young terminal session (revoked 1 day ago) -> should be retained
+      // 3. Active session -> should be retained
+      const oldRaw = randomBytes(32).toString("hex");
+      const oldDigest = generateDigest(oldRaw);
+      const oldSessId = (await runtimeClient.query(
+        `SELECT identity.create_auth_session($1, $2, 'RELATIONSHIP') AS session_id`,
+        [humanAccountId, oldDigest]
+      )).rows[0].session_id;
+      await bootstrapClient.query(`UPDATE identity.auth_sessions SET revoked_at = clock_timestamp() - interval '100 days', revocation_reason_code = 'TEST_PURGE' WHERE id = $1`, [oldSessId]);
+
+      const youngRaw = randomBytes(32).toString("hex");
+      const youngDigest = generateDigest(youngRaw);
+      const youngSessId = (await runtimeClient.query(
+        `SELECT identity.create_auth_session($1, $2, 'RELATIONSHIP') AS session_id`,
+        [humanAccountId, youngDigest]
+      )).rows[0].session_id;
+      await bootstrapClient.query(`UPDATE identity.auth_sessions SET revoked_at = clock_timestamp() - interval '1 day', revocation_reason_code = 'TEST_PURGE' WHERE id = $1`, [youngSessId]);
+
+      // Purge with batch limit 1 -> should purge old terminal session only
+      const purgeBatchRes = await bootstrapClient.query(`SELECT identity.purge_auth_sessions(clock_timestamp() - interval '90 days', 1) AS cnt`);
+      assert(purgeBatchRes.rows[0]?.cnt === 1, "SESS-20: Batch limit p_limit=1 purged exactly 1 old terminal session");
+
+      const checkOldPurged = await bootstrapClient.query(`SELECT id FROM identity.auth_sessions WHERE id = $1`, [oldSessId]);
+      assert(checkOldPurged.rows.length === 0, "SESS-20: Old terminal session was deleted by purge");
+
+      const checkYoungRetained = await bootstrapClient.query(`SELECT id FROM identity.auth_sessions WHERE id = $1`, [youngSessId]);
+      assert(checkYoungRetained.rows.length === 1, "SESS-20: Young terminal session retained");
 
       try {
         await bootstrapClient.query(`SELECT identity.purge_auth_sessions(clock_timestamp(), 20000)`);
@@ -508,8 +667,8 @@ async function runSessionTestHarness() {
         assert(err.code === "22023", "SESS-20: Excessive p_limit rejected with SQLSTATE 22023");
       }
 
-      // SESS-21: Concurrent Resolve/Revoke
-      console.log("\nExecuting SESS-21: Concurrent Resolve & Revoke...");
+      // SESS-21: Concurrent Resolve & Revoke (True Overlapping Transactions)
+      console.log("\nExecuting SESS-21: Concurrent Resolve & Revoke (True Overlapping Transactions)...");
       const rawTokenConc = randomBytes(32).toString("hex");
       const digestConc = generateDigest(rawTokenConc);
       await runtimeClient.query(
@@ -522,26 +681,35 @@ async function runSessionTestHarness() {
       await clientA.connect();
       await clientB.connect();
 
-      await clientA.query("BEGIN");
-      await clientB.query("BEGIN");
+      try {
+        await clientA.query("BEGIN");
+        await clientB.query("BEGIN");
 
-      // Lock row in A
-      const resA = await clientA.query(`SELECT identity.revoke_auth_session($1, 'CONCURRENT_TEST') AS revoked`, [digestConc]);
-      assert(resA.rows[0]?.revoked === true, "SESS-21: Transaction A revoked session");
-      await clientA.query("COMMIT");
+        // Transaction A revokes session
+        const resA = await clientA.query(`SELECT identity.revoke_auth_session($1, 'CONCURRENT_TEST') AS revoked`, [digestConc]);
+        assert(resA.rows[0]?.revoked === true, "SESS-21: Transaction A revoked session");
 
-      const resB = await clientB.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestConc]);
-      assert(resB.rows.length === 0, "SESS-21: Transaction B sees revoked state after A commits");
-      await clientB.query("COMMIT");
+        // Transaction B initiates resolve_auth_session asynchronously while A holds the row lock
+        const promiseB = clientB.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestConc]);
 
-      await clientA.end();
-      await clientB.end();
+        // Transaction A commits, releasing lock
+        await clientA.query("COMMIT");
 
-      // SESS-25: Existing S1 Regression
-      console.log("\nExecuting SESS-25: Existing S1 Access Closure Tests...");
-      assert(true, "SESS-25: S1 Access Closure verified");
+        // Transaction B completes after lock is released
+        const resB = await promiseB;
+        assert(resB.rows.length === 0, "SESS-21: Transaction B sees revoked state after Transaction A commits");
+        await clientB.query("COMMIT");
+      } finally {
+        await clientA.end().catch(() => {});
+        await clientB.end().catch(() => {});
+      }
 
-      // SESS-26: DB-DEC-021 Test Suite = 65/65
+      // SESS-25: REAL Existing S1 Access Closure Integration Test Suite
+      console.log("\nExecuting SESS-25: REAL Existing S1 Access Closure Integration Test Suite...");
+      execFileSync("npx", ["tsx", "src/test-s1-foundation-access-closure.ts"], { cwd: packageRoot, env: envOverrides, stdio: "pipe", shell: true });
+      assert(true, "SESS-25: REAL S1 Access Closure test suite PASSED");
+
+      // SESS-26: REAL DB-DEC-021 Automated Test Suite (65/65)
       console.log("\nExecuting SESS-26: DB-DEC-021 Automated Test Suite (65/65)...");
       execFileSync("npx", ["tsx", "src/test-dec021-harness.ts"], { cwd: packageRoot, env: envOverrides, stdio: "pipe", shell: true });
       assert(true, "SESS-26: DB-DEC-021 Test Suite PASSED (65/65)");

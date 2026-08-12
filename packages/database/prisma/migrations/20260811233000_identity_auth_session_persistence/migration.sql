@@ -858,7 +858,8 @@ BEGIN
 END;
 $$;
 
--- 12. Strict Revocation of Default EXECUTE from PUBLIC, vind_importer, vind_app_runtime
+-- 12. Strict Revocation of Direct Table Access & Default EXECUTE from PUBLIC, vind_importer, vind_app_runtime
+REVOKE ALL ON TABLE identity.auth_sessions FROM PUBLIC, vind_importer, vind_app_runtime;
 REVOKE ALL ON FUNCTION identity.create_auth_session(uuid, bytea, text, uuid, uuid, uuid, text, boolean) FROM PUBLIC, vind_importer, vind_app_runtime;
 REVOKE ALL ON FUNCTION identity.create_auth_session_internal(uuid, bytea, text, uuid, uuid, uuid, text, boolean, uuid) FROM PUBLIC, vind_importer, vind_app_runtime;
 REVOKE ALL ON FUNCTION identity.resolve_auth_session(bytea) FROM PUBLIC, vind_importer, vind_app_runtime;
@@ -874,12 +875,7 @@ GRANT EXECUTE ON FUNCTION identity.revoke_auth_session(bytea, text) TO vind_app_
 GRANT EXECUTE ON FUNCTION identity.revoke_account_sessions(bytea, text, boolean) TO vind_app_runtime;
 GRANT EXECUTE ON FUNCTION identity.rotate_auth_session(bytea, bytea, text, uuid, uuid, uuid, text, boolean, text) TO vind_app_runtime;
 
--- 14. Grant Purge Function Only to Maintenance Owner
-GRANT EXECUTE ON FUNCTION identity.purge_auth_sessions(timestamptz, integer) TO vind_db_owner;
-
--- 15. Forward-fix verification.read_evidence data access logging (fields_accessed text[] cast)
-DROP FUNCTION IF EXISTS verification.read_evidence(uuid, text) CASCADE;
-
+-- 15. Forward-Fix for verification.read_evidence Data Access Log Array Type
 CREATE OR REPLACE FUNCTION verification.read_evidence(p_evidence_id uuid, p_purpose_code text)
  RETURNS TABLE(id uuid, evidence_type text, document_number_masked text, storage_path_encrypted text, status text)
  LANGUAGE plpgsql
@@ -937,5 +933,5 @@ BEGIN
 END;
 $function$;
 
-REVOKE ALL ON FUNCTION verification.read_evidence(uuid, text) FROM PUBLIC, vind_importer;
 GRANT EXECUTE ON FUNCTION verification.read_evidence(uuid, text) TO vind_app_runtime;
+
