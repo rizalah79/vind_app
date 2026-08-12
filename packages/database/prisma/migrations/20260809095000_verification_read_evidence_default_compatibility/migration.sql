@@ -6,8 +6,9 @@
 DO $$
 BEGIN
     IF NOT EXISTS (
-        SELECT 1 FROM public.vind_schema_migrations
-        WHERE migration_name LIKE '%20260809100000%'
+        SELECT 1
+        FROM public.vind_schema_migrations
+        WHERE migration_name = '20260809100000_dec021_remediation_forward_fix'
     ) THEN
         DROP FUNCTION IF EXISTS verification.read_evidence(uuid, text);
     END IF;
