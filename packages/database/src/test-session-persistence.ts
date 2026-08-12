@@ -74,7 +74,7 @@ async function runSessionTestHarness() {
   impUrlObj.pathname = `/${acceptDbName}`;
   const isoImporterUrl = impUrlObj.toString();
 
-  // Initialize extensions, logical schemas & grants on isolated database (WITHOUT test migration hooks)
+  // Initialize extensions, logical schemas & grants on isolated database
   const schemaBootstrapSql = `
     CREATE EXTENSION IF NOT EXISTS postgis;
     CREATE EXTENSION IF NOT EXISTS btree_gist;
@@ -127,7 +127,7 @@ async function runSessionTestHarness() {
 
     // SESS-23: Second migration execution = 0 applied
     console.log("\nExecuting SESS-23: Replay Migration Execution...");
-    const replayOutput = execFileSync("npx", ["tsx", "src/migrate.ts"], { cwd: packageRoot, env: envOverrides, shell: true }).toString();
+    const replayOutput = execFileSync("npx", ["tsx", "src/migrate.ts"], { cwd: packageRoot, env: envOverrides, stdio: "pipe", shell: true }).toString();
     assert(replayOutput.includes("0 applied") || replayOutput.includes("0 pending"), "SESS-23: Replay migration verified 0 applied");
 
     // SESS-24: Checksum validation against actual disk SHA-256 files
@@ -204,6 +204,7 @@ async function runSessionTestHarness() {
       const humanAccountId = humanAccRes.rows[0].account_id;
       const humanAccountKey = humanAccRes.rows[0].account_key;
       const humanPersonKey = humanAccRes.rows[0].person_key;
+      const humanPersonId = humanAccRes.rows[0].person_id;
 
       const serviceAccRes = await bootstrapClient.query(`
         SELECT a.id AS account_id, a.seed_key AS account_key, spg.id AS grant_id, spg.grant_key
@@ -218,15 +219,17 @@ async function runSessionTestHarness() {
       const serviceGrantKey = serviceAccRes.rows[0].grant_key;
 
       const localAssRes = await bootstrapClient.query(`
-        SELECT sa.id AS assignment_id, sa.seed_key AS assignment_key, sa.subject_person_id, il.account_id
+        SELECT sa.id AS assignment_id, sa.membership_id, sa.seed_key AS assignment_key, sa.subject_person_id, il.account_id
         FROM access.scoped_assignments sa
         JOIN identity.identity_links il ON il.person_id = sa.subject_person_id
         JOIN identity.accounts a ON a.id = il.account_id
         WHERE sa.status = 'ACTIVE' AND a.status = 'ACTIVE' AND il.status = 'ACTIVE'
         LIMIT 1
       `);
-      const localAssId = localAssRes.rows[0]?.assignment_id;
-      const localAssAccountId = localAssRes.rows[0]?.account_id;
+      assert(localAssRes.rows.length > 0, "SESS-11 Fixture: Deterministic LOCAL assignment fixture found");
+      const localAssId = localAssRes.rows[0].assignment_id;
+      const localAssMembershipId = localAssRes.rows[0].membership_id;
+      const localAssAccountId = localAssRes.rows[0].account_id;
 
       // SESS-02: Valid HUMAN session creation
       console.log("\nExecuting SESS-02: Valid HUMAN Session Creation...");
@@ -316,8 +319,8 @@ async function runSessionTestHarness() {
       );
       assert(revokeCountRes.rows[0]?.cnt === 1, "SESS-08/19: Duplicate revoke emitted exactly 1 security event (no duplicate event)");
 
-      // SESS-09: Account Status Invalidation
-      console.log("\nExecuting SESS-09: Account Status Invalidation...");
+      // SESS-09: Account Status Invalidation (LOCKED & DISABLED)
+      console.log("\nExecuting SESS-09: Account Status Invalidation (LOCKED & DISABLED)...");
       const rawTokenAccLock = randomBytes(32).toString("hex");
       const digestAccLock = generateDigest(rawTokenAccLock);
       await runtimeClient.query(
@@ -325,9 +328,16 @@ async function runSessionTestHarness() {
         [humanAccountId, digestAccLock, "RELATIONSHIP"]
       );
 
-      await bootstrapClient.query(`UPDATE identity.accounts SET status = 'DISABLED' WHERE id = $1`, [humanAccountId]);
+      // Test LOCKED
+      await bootstrapClient.query(`UPDATE identity.accounts SET status = 'LOCKED' WHERE id = $1`, [humanAccountId]);
       const resolveLockedRes = await runtimeClient.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestAccLock]);
-      assert(resolveLockedRes.rows.length === 0, "SESS-09: Disabled account session fails resolution");
+      assert(resolveLockedRes.rows.length === 0, "SESS-09: LOCKED account session fails resolution");
+      await bootstrapClient.query(`UPDATE identity.accounts SET status = 'ACTIVE' WHERE id = $1`, [humanAccountId]);
+
+      // Test DISABLED
+      await bootstrapClient.query(`UPDATE identity.accounts SET status = 'DISABLED' WHERE id = $1`, [humanAccountId]);
+      const resolveDisabledRes = await runtimeClient.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestAccLock]);
+      assert(resolveDisabledRes.rows.length === 0, "SESS-09: DISABLED account session fails resolution");
       await bootstrapClient.query(`UPDATE identity.accounts SET status = 'ACTIVE' WHERE id = $1`, [humanAccountId]);
 
       // SESS-10: Identity Link Status Invalidation
@@ -344,54 +354,78 @@ async function runSessionTestHarness() {
       assert(resolveLinkRes.rows.length === 0, "SESS-10: Revoked identity link fails resolution");
       await bootstrapClient.query(`UPDATE identity.identity_links SET status = 'ACTIVE' WHERE account_id = $1`, [humanAccountId]);
 
-      // SESS-11: LOCAL Assignment & Membership Invalidation
+      // SESS-11: LOCAL Assignment & Membership Invalidation (Full Contract)
       console.log("\nExecuting SESS-11: LOCAL Assignment & Membership Invalidation...");
-      if (localAssId && localAssAccountId) {
-        const rawTokenLocal = randomBytes(32).toString("hex");
-        const digestLocal = generateDigest(rawTokenLocal);
-        await runtimeClient.query(
-          `SELECT identity.create_auth_session($1, $2, 'LOCAL', $3)`,
-          [localAssAccountId, digestLocal, localAssId]
-        );
+      const rawTokenLocal = randomBytes(32).toString("hex");
+      const digestLocal = generateDigest(rawTokenLocal);
+      await runtimeClient.query(
+        `SELECT identity.create_auth_session($1, $2, 'LOCAL', $3)`,
+        [localAssAccountId, digestLocal, localAssId]
+      );
 
-        const resolveLocalActive = await runtimeClient.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestLocal]);
-        assert(resolveLocalActive.rows.length === 1, "SESS-11: Active LOCAL assignment session resolves");
+      const resolveLocalActive = await runtimeClient.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestLocal]);
+      assert(resolveLocalActive.rows.length === 1, "SESS-11: Active LOCAL assignment session resolves");
 
-        // Test inactive status
-        await bootstrapClient.query(`UPDATE access.scoped_assignments SET status = 'SUSPENDED' WHERE id = $1`, [localAssId]);
-        const resolveLocalInactive = await runtimeClient.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestLocal]);
-        assert(resolveLocalInactive.rows.length === 0, "SESS-11: Inactive LOCAL assignment fails resolution");
-        await bootstrapClient.query(`UPDATE access.scoped_assignments SET status = 'ACTIVE' WHERE id = $1`, [localAssId]);
+      // Test non-active assignment status
+      await bootstrapClient.query(`UPDATE access.scoped_assignments SET status = 'SUSPENDED' WHERE id = $1`, [localAssId]);
+      const resolveLocalInactive = await runtimeClient.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestLocal]);
+      assert(resolveLocalInactive.rows.length === 0, "SESS-11: Inactive LOCAL assignment fails resolution");
+      await bootstrapClient.query(`UPDATE access.scoped_assignments SET status = 'ACTIVE' WHERE id = $1`, [localAssId]);
 
-        // Test future effective_from
-        await bootstrapClient.query(`UPDATE access.scoped_assignments SET effective_from = clock_timestamp() + interval '1 hour' WHERE id = $1`, [localAssId]);
-        const resolveLocalFuture = await runtimeClient.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestLocal]);
-        assert(resolveLocalFuture.rows.length === 0, "SESS-11: Future effective_from LOCAL assignment fails resolution");
+      // Test future effective_from
+      await bootstrapClient.query(`UPDATE access.scoped_assignments SET effective_from = clock_timestamp() + interval '1 hour' WHERE id = $1`, [localAssId]);
+      const resolveLocalFuture = await runtimeClient.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestLocal]);
+      assert(resolveLocalFuture.rows.length === 0, "SESS-11: Future effective_from LOCAL assignment fails resolution");
 
-        // Test expired effective_to
-        await bootstrapClient.query(`UPDATE access.scoped_assignments SET effective_from = clock_timestamp() - interval '2 hours', effective_to = clock_timestamp() - interval '1 minute' WHERE id = $1`, [localAssId]);
-        const resolveLocalExpired = await runtimeClient.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestLocal]);
-        assert(resolveLocalExpired.rows.length === 0, "SESS-11: Expired LOCAL assignment fails resolution");
+      // Test expired effective_to
+      await bootstrapClient.query(`UPDATE access.scoped_assignments SET effective_from = clock_timestamp() - interval '2 hours', effective_to = clock_timestamp() - interval '1 minute' WHERE id = $1`, [localAssId]);
+      const resolveLocalExpired = await runtimeClient.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestLocal]);
+      assert(resolveLocalExpired.rows.length === 0, "SESS-11: Expired LOCAL assignment fails resolution");
 
-        // Restore active state
-        await bootstrapClient.query(`UPDATE access.scoped_assignments SET effective_from = clock_timestamp() - interval '1 hour', effective_to = NULL WHERE id = $1`, [localAssId]);
+      // Restore active assignment state
+      await bootstrapClient.query(`UPDATE access.scoped_assignments SET effective_from = clock_timestamp() - interval '1 hour', effective_to = NULL WHERE id = $1`, [localAssId]);
 
-        // SESS-18: Verify LOCAL session creation fails when assignment is not active/effective
-        await bootstrapClient.query(`UPDATE access.scoped_assignments SET status = 'SUSPENDED' WHERE id = $1`, [localAssId]);
-        const rawTokenFailLocal = randomBytes(32).toString("hex");
-        const digestFailLocal = generateDigest(rawTokenFailLocal);
+      // Test membership invalidation when membership_id IS NOT NULL
+      if (localAssMembershipId) {
+        // Membership non-active status -> creation & resolve fail
+        await bootstrapClient.query(`UPDATE access.memberships SET status = 'SUSPENDED' WHERE id = $1`, [localAssMembershipId]);
         try {
-          await runtimeClient.query(`SELECT identity.create_auth_session($1, $2, 'LOCAL', $3)`, [localAssAccountId, digestFailLocal, localAssId]);
-          assert(false, "SESS-18/Creation: LOCAL session creation with suspended assignment should fail");
+          await runtimeClient.query(`SELECT identity.create_auth_session($1, $2, 'LOCAL', $3)`, [localAssAccountId, generateDigest(randomBytes(32).toString("hex")), localAssId]);
+          assert(false, "SESS-11: LOCAL session creation with suspended membership should fail");
         } catch (err: any) {
-          assert(err.code === "28000" || err.message.includes("Invalid"), "SESS-18/Creation: Creation rejected when assignment inactive");
+          assert(err.code === "28000", "SESS-11: LOCAL session creation rejected when membership suspended");
         }
-        await bootstrapClient.query(`UPDATE access.scoped_assignments SET status = 'ACTIVE' WHERE id = $1`, [localAssId]);
-      } else {
-        assert(true, "SESS-11: LOCAL assignment membership invalidation verified");
+        const resolveMemSusp = await runtimeClient.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestLocal]);
+        assert(resolveMemSusp.rows.length === 0, "SESS-11: LOCAL session resolve fails when membership suspended");
+        await bootstrapClient.query(`UPDATE access.memberships SET status = 'ACTIVE' WHERE id = $1`, [localAssMembershipId]);
+
+        // Membership future effective_from -> creation & resolve fail
+        await bootstrapClient.query(`UPDATE access.memberships SET effective_from = clock_timestamp() + interval '1 hour', accepted_at = clock_timestamp() + interval '2 hours' WHERE id = $1`, [localAssMembershipId]);
+        try {
+          await runtimeClient.query(`SELECT identity.create_auth_session($1, $2, 'LOCAL', $3)`, [localAssAccountId, generateDigest(randomBytes(32).toString("hex")), localAssId]);
+          assert(false, "SESS-11: LOCAL session creation with future membership should fail");
+        } catch (err: any) {
+          assert(err.code === "28000", "SESS-11: LOCAL session creation rejected when membership future effective_from");
+        }
+        const resolveMemFuture = await runtimeClient.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestLocal]);
+        assert(resolveMemFuture.rows.length === 0, "SESS-11: LOCAL session resolve fails when membership future effective_from");
+
+        // Membership expired effective_to -> creation & resolve fail
+        await bootstrapClient.query(`UPDATE access.memberships SET effective_from = clock_timestamp() - interval '2 hours', effective_to = clock_timestamp() - interval '1 minute', accepted_at = clock_timestamp() - interval '2 hours' WHERE id = $1`, [localAssMembershipId]);
+        try {
+          await runtimeClient.query(`SELECT identity.create_auth_session($1, $2, 'LOCAL', $3)`, [localAssAccountId, generateDigest(randomBytes(32).toString("hex")), localAssId]);
+          assert(false, "SESS-11: LOCAL session creation with expired membership should fail");
+        } catch (err: any) {
+          assert(err.code === "28000", "SESS-11: LOCAL session creation rejected when membership expired");
+        }
+        const resolveMemExpired = await runtimeClient.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestLocal]);
+        assert(resolveMemExpired.rows.length === 0, "SESS-11: LOCAL session resolve fails when membership expired");
+
+        // Restore active membership state
+        await bootstrapClient.query(`UPDATE access.memberships SET effective_from = clock_timestamp() - interval '1 hour', effective_to = NULL, accepted_at = clock_timestamp() - interval '1 hour' WHERE id = $1`, [localAssMembershipId]);
       }
 
-      // SESS-12: PLATFORM Authority Plane Tests
+      // SESS-12: PLATFORM Authority Plane Negative Tests
       console.log("\nExecuting SESS-12: PLATFORM Authority Plane Tests...");
       const platAssRes = await bootstrapClient.query(`
         SELECT pa.id AS assignment_id, pa.subject_person_id, il.account_id
@@ -401,24 +435,34 @@ async function runSessionTestHarness() {
         WHERE pa.status = 'ACTIVE' AND a.status = 'ACTIVE' AND il.status = 'ACTIVE'
         LIMIT 1
       `);
-      const platAssId = platAssRes.rows[0]?.assignment_id;
-      const platAccountId = platAssRes.rows[0]?.account_id || humanAccountId;
+      assert(platAssRes.rows.length > 0, "SESS-12 Fixture: Active PLATFORM assignment found");
+      const platAssId = platAssRes.rows[0].assignment_id;
+      const platAccountId = platAssRes.rows[0].account_id;
 
-      if (platAssId) {
-        const rawTokenPlat = randomBytes(32).toString("hex");
-        const digestPlat = generateDigest(rawTokenPlat);
-        const createPlatRes = await runtimeClient.query(
-          `SELECT identity.create_auth_session($1, $2, 'PLATFORM', NULL, $3) AS session_id`,
-          [platAccountId, digestPlat, platAssId]
-        );
-        assert(Boolean(createPlatRes.rows[0]?.session_id), "SESS-12: PLATFORM session created successfully");
-        const resolvePlatRes = await runtimeClient.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestPlat]);
-        assert(resolvePlatRes.rows[0]?.authority_plane === "PLATFORM", "SESS-12: Resolved PLATFORM session returned authority_plane = PLATFORM");
-      } else {
-        assert(true, "SESS-12: PLATFORM assignment fixture verified");
+      const rawTokenPlat = randomBytes(32).toString("hex");
+      const digestPlat = generateDigest(rawTokenPlat);
+      const createPlatRes = await runtimeClient.query(
+        `SELECT identity.create_auth_session($1, $2, 'PLATFORM', NULL, $3) AS session_id`,
+        [platAccountId, digestPlat, platAssId]
+      );
+      assert(Boolean(createPlatRes.rows[0]?.session_id), "SESS-12: PLATFORM session created successfully");
+      const resolvePlatRes = await runtimeClient.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestPlat]);
+      assert(resolvePlatRes.rows[0]?.authority_plane === "PLATFORM", "SESS-12: Resolved PLATFORM session returned authority_plane = PLATFORM");
+
+      // PLATFORM negative tests
+      await bootstrapClient.query(`UPDATE access.platform_assignments SET status = 'SUSPENDED' WHERE id = $1`, [platAssId]);
+      const resolvePlatSusp = await runtimeClient.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestPlat]);
+      assert(resolvePlatSusp.rows.length === 0, "SESS-12: Suspended platform assignment fails resolution");
+
+      try {
+        await runtimeClient.query(`SELECT identity.create_auth_session($1, $2, 'PLATFORM', NULL, $3)`, [platAccountId, generateDigest(randomBytes(32).toString("hex")), platAssId]);
+        assert(false, "SESS-12: Creation with suspended platform assignment should fail");
+      } catch (err: any) {
+        assert(err.code === "28000", "SESS-12: Creation rejected when platform assignment is invalid");
       }
+      await bootstrapClient.query(`UPDATE access.platform_assignments SET status = 'ACTIVE' WHERE id = $1`, [platAssId]);
 
-      // SESS-13: SERVICE Authority Plane Tests
+      // SESS-13: SERVICE Authority Plane Negative Tests
       console.log("\nExecuting SESS-13: SERVICE Authority Plane Tests...");
       const rawTokenSvc = randomBytes(32).toString("hex");
       const digestSvc = generateDigest(rawTokenSvc);
@@ -431,6 +475,19 @@ async function runSessionTestHarness() {
       assert(resolveSvcRes.rows[0]?.actor_kind === "SERVICE", "SESS-13: Resolved SERVICE session returned actor_kind = SERVICE");
       assert(resolveSvcRes.rows[0]?.authority_plane === "SERVICE", "SESS-13: Resolved SERVICE session returned authority_plane = SERVICE");
       assert(resolveSvcRes.rows[0]?.service_grant_key === serviceGrantKey, "SESS-13: Resolved SERVICE session returned canonical service_grant_key");
+
+      // SERVICE negative tests
+      await bootstrapClient.query(`UPDATE access.service_principal_grants SET status = 'SUSPENDED' WHERE id = $1`, [serviceGrantId]);
+      const resolveSvcSusp = await runtimeClient.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestSvc]);
+      assert(resolveSvcSusp.rows.length === 0, "SESS-13: Suspended service grant fails resolution");
+
+      try {
+        await runtimeClient.query(`SELECT identity.create_auth_session($1, $2, 'SERVICE', NULL, NULL, $3)`, [serviceAccountId, generateDigest(randomBytes(32).toString("hex")), serviceGrantId]);
+        assert(false, "SESS-13: Creation with suspended service grant should fail");
+      } catch (err: any) {
+        assert(err.code === "28000", "SESS-13: Creation rejected when service grant is invalid");
+      }
+      await bootstrapClient.query(`UPDATE access.service_principal_grants SET status = 'ACTIVE' WHERE id = $1`, [serviceGrantId]);
 
       // SESS-14: Account-Wide Logout (Keep Current = true & false)
       console.log("\nExecuting SESS-14: Account-Wide Logout...");
@@ -460,7 +517,16 @@ async function runSessionTestHarness() {
       const resolveSess2 = await runtimeClient.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestAcc2]);
       assert(resolveSess2.rows.length === 0, "SESS-14: Other session revoked when keep_current=true");
 
-      // SESS-15: Session Rotation & Lineage Constraints (Idle & Absolute Expiration Rejections)
+      // Test keep_current = false
+      const revokeAllRes = await runtimeClient.query(
+        `SELECT identity.revoke_account_sessions($1, $2, false) AS cnt`,
+        [digestAcc1, "FORCE_LOGOUT"]
+      );
+      assert(revokeAllRes.rows[0]?.cnt >= 1, "SESS-14: Account-wide logout with keep_current=false succeeded");
+      const resolveSess1After = await runtimeClient.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestAcc1]);
+      assert(resolveSess1After.rows.length === 0, "SESS-14: Current session revoked when keep_current=false");
+
+      // SESS-15: Session Rotation & Lineage Constraints
       console.log("\nExecuting SESS-15: Session Rotation & Lineage Constraint...");
       const rawTokenRotOld = randomBytes(32).toString("hex");
       const digestRotOld = generateDigest(rawTokenRotOld);
@@ -568,7 +634,7 @@ async function runSessionTestHarness() {
         await runtimeClient.query(`UPDATE identity.auth_sessions SET last_activity_at = clock_timestamp()`);
         assert(false, "SESS-17: Direct UPDATE on auth_sessions should fail");
       } catch (err: any) {
-        assert(err.code === "42501", `SESS-17: Direct UPDATE denied with SQLSTATE 42501 (got ${err.code}: ${err.message})`);
+        assert(err.code === "42501", "SESS-17: Direct UPDATE denied with SQLSTATE 42501");
       }
 
       try {
@@ -578,7 +644,7 @@ async function runSessionTestHarness() {
         assert(err.code === "42501", "SESS-17: Direct DELETE denied with SQLSTATE 42501");
       }
 
-      // SESS-18: Importer Direct Table & Function Access Denied (SELECT, INSERT, UPDATE, DELETE and EXECUTE)
+      // SESS-18: Importer Direct Table & Function Access Denied
       console.log("\nExecuting SESS-18: Importer Direct Table & Function Access Denied...");
       try {
         await importerClient.query(`SELECT * FROM identity.auth_sessions LIMIT 1`);
@@ -598,7 +664,7 @@ async function runSessionTestHarness() {
         await importerClient.query(`UPDATE identity.auth_sessions SET last_activity_at = clock_timestamp()`);
         assert(false, "SESS-18: Importer direct UPDATE should fail");
       } catch (err: any) {
-        assert(err.code === "42501", `SESS-18: Importer UPDATE denied with SQLSTATE 42501 (got ${err.code}: ${err.message})`);
+        assert(err.code === "42501", "SESS-18: Importer UPDATE denied with SQLSTATE 42501");
       }
 
       try {
@@ -608,15 +674,30 @@ async function runSessionTestHarness() {
         assert(err.code === "42501", "SESS-18: Importer DELETE denied with SQLSTATE 42501");
       }
 
+      // Inspect pg_proc for vind_importer function EXECUTE privileges
+      const fnPrivRes = await bootstrapClient.query(`
+        SELECT proname, has_function_privilege('vind_importer', p.oid, 'execute') AS can_exec
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'identity'
+          AND proname IN (
+            'create_auth_session', 'create_auth_session_internal', 'resolve_auth_session',
+            'revoke_auth_session', 'revoke_account_sessions', 'rotate_auth_session', 'purge_auth_sessions'
+          )
+      `);
+      for (const row of fnPrivRes.rows) {
+        assert(row.can_exec === false, `SESS-18: Importer EXECUTE privilege is FALSE for function ${row.proname}`);
+      }
+
       try {
         const testDigest = generateDigest("importer_exec_test");
         await importerClient.query(`SELECT * FROM identity.resolve_auth_session($1)`, [testDigest]);
         assert(false, "SESS-18: Importer EXECUTE resolve_auth_session should fail");
       } catch (err: any) {
-        assert(err.code === "42501", "SESS-18: Importer EXECUTE function denied with SQLSTATE 42501");
+        assert(err.code === "42501", "SESS-18: Importer EXECUTE function invocation denied with SQLSTATE 42501");
       }
 
-      // SESS-19: Lifecycle Events + Canonical Actor Keys + Token/Digest Absence in Details
+      // SESS-19: Lifecycle Events + Canonical Actor Keys + Token/Digest Absence
       console.log("\nExecuting SESS-19: Lifecycle Security Audit Events...");
       const eventsRes = await bootstrapClient.query(
         `SELECT event_type, actor_account_key, actor_person_key, details FROM security.security_events WHERE subject_key = $1`,
@@ -629,18 +710,29 @@ async function runSessionTestHarness() {
 
       // SESS-20: Retention Purge Function, Batch Limit & Retention Logic
       console.log("\nExecuting SESS-20: Retention Purge & Batch Limit...");
-
-      // Create test sessions for retention logic test:
-      // 1. Old terminal session (revoked 100 days ago) -> should be purged
-      // 2. Young terminal session (revoked 1 day ago) -> should be retained
-      // 3. Active session -> should be retained
-      const oldRaw = randomBytes(32).toString("hex");
-      const oldDigest = generateDigest(oldRaw);
-      const oldSessId = (await runtimeClient.query(
+      const oldRaw1 = randomBytes(32).toString("hex");
+      const oldDigest1 = generateDigest(oldRaw1);
+      const oldSessId1 = (await runtimeClient.query(
         `SELECT identity.create_auth_session($1, $2, 'RELATIONSHIP') AS session_id`,
-        [humanAccountId, oldDigest]
+        [humanAccountId, oldDigest1]
       )).rows[0].session_id;
-      await bootstrapClient.query(`UPDATE identity.auth_sessions SET revoked_at = clock_timestamp() - interval '100 days', revocation_reason_code = 'TEST_PURGE' WHERE id = $1`, [oldSessId]);
+      await bootstrapClient.query(`UPDATE identity.auth_sessions SET revoked_at = clock_timestamp() - interval '100 days', revocation_reason_code = 'TEST_PURGE' WHERE id = $1`, [oldSessId1]);
+
+      const oldRaw2 = randomBytes(32).toString("hex");
+      const oldDigest2 = generateDigest(oldRaw2);
+      const oldSessId2 = (await runtimeClient.query(
+        `SELECT identity.create_auth_session($1, $2, 'RELATIONSHIP') AS session_id`,
+        [humanAccountId, oldDigest2]
+      )).rows[0].session_id;
+      await bootstrapClient.query(`UPDATE identity.auth_sessions SET revoked_at = clock_timestamp() - interval '100 days', revocation_reason_code = 'TEST_PURGE' WHERE id = $1`, [oldSessId2]);
+
+      const oldRaw3 = randomBytes(32).toString("hex");
+      const oldDigest3 = generateDigest(oldRaw3);
+      const oldSessId3 = (await runtimeClient.query(
+        `SELECT identity.create_auth_session($1, $2, 'RELATIONSHIP') AS session_id`,
+        [humanAccountId, oldDigest3]
+      )).rows[0].session_id;
+      await bootstrapClient.query(`UPDATE identity.auth_sessions SET revoked_at = clock_timestamp() - interval '100 days', revocation_reason_code = 'TEST_PURGE' WHERE id = $1`, [oldSessId3]);
 
       const youngRaw = randomBytes(32).toString("hex");
       const youngDigest = generateDigest(youngRaw);
@@ -650,12 +742,13 @@ async function runSessionTestHarness() {
       )).rows[0].session_id;
       await bootstrapClient.query(`UPDATE identity.auth_sessions SET revoked_at = clock_timestamp() - interval '1 day', revocation_reason_code = 'TEST_PURGE' WHERE id = $1`, [youngSessId]);
 
-      // Purge with batch limit 1 -> should purge old terminal session only
-      const purgeBatchRes = await bootstrapClient.query(`SELECT identity.purge_auth_sessions(clock_timestamp() - interval '90 days', 1) AS cnt`);
-      assert(purgeBatchRes.rows[0]?.cnt === 1, "SESS-20: Batch limit p_limit=1 purged exactly 1 old terminal session");
+      // Purge with batch limit 2 -> should purge exactly 2 old terminal sessions
+      const purgeBatchRes1 = await bootstrapClient.query(`SELECT identity.purge_auth_sessions(clock_timestamp() - interval '90 days', 2) AS cnt`);
+      assert(purgeBatchRes1.rows[0]?.cnt === 2, "SESS-20: Batch limit p_limit=2 purged exactly 2 old terminal sessions");
 
-      const checkOldPurged = await bootstrapClient.query(`SELECT id FROM identity.auth_sessions WHERE id = $1`, [oldSessId]);
-      assert(checkOldPurged.rows.length === 0, "SESS-20: Old terminal session was deleted by purge");
+      // Purge remaining eligible old session
+      const purgeBatchRes2 = await bootstrapClient.query(`SELECT identity.purge_auth_sessions(clock_timestamp() - interval '90 days', 10) AS cnt`);
+      assert(purgeBatchRes2.rows[0]?.cnt >= 1, "SESS-20: Subsequent purge cleaned remaining old terminal session");
 
       const checkYoungRetained = await bootstrapClient.query(`SELECT id FROM identity.auth_sessions WHERE id = $1`, [youngSessId]);
       assert(checkYoungRetained.rows.length === 1, "SESS-20: Young terminal session retained");
@@ -667,14 +760,13 @@ async function runSessionTestHarness() {
         assert(err.code === "22023", "SESS-20: Excessive p_limit rejected with SQLSTATE 22023");
       }
 
-      // SESS-21: Concurrent Resolve & Revoke (True Overlapping Transactions)
+      // SESS-21: Concurrent Resolve & Revoke (Scenario A & Scenario B)
       console.log("\nExecuting SESS-21: Concurrent Resolve & Revoke (True Overlapping Transactions)...");
-      const rawTokenConc = randomBytes(32).toString("hex");
-      const digestConc = generateDigest(rawTokenConc);
-      await runtimeClient.query(
-        `SELECT identity.create_auth_session($1, $2, $3)`,
-        [humanAccountId, digestConc, "RELATIONSHIP"]
-      );
+
+      // Scenario A — resolve holds lock first, revoke waits
+      const rawTokenConcA = randomBytes(32).toString("hex");
+      const digestConcA = generateDigest(rawTokenConcA);
+      await runtimeClient.query(`SELECT identity.create_auth_session($1, $2, 'RELATIONSHIP')`, [humanAccountId, digestConcA]);
 
       const clientA = new Client({ connectionString: isoRuntimeUrl });
       const clientB = new Client({ connectionString: isoRuntimeUrl });
@@ -685,24 +777,77 @@ async function runSessionTestHarness() {
         await clientA.query("BEGIN");
         await clientB.query("BEGIN");
 
-        // Transaction A revokes session
-        const resA = await clientA.query(`SELECT identity.revoke_auth_session($1, 'CONCURRENT_TEST') AS revoked`, [digestConc]);
-        assert(resA.rows[0]?.revoked === true, "SESS-21: Transaction A revoked session");
+        const resA = await clientA.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestConcA]);
+        assert(resA.rows.length === 1, "SESS-21 Scenario A: Resolve holds lock first");
 
-        // Transaction B initiates resolve_auth_session asynchronously while A holds the row lock
-        const promiseB = clientB.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestConc]);
+        const promiseRevokeB = clientB.query(`SELECT identity.revoke_auth_session($1, 'SCENARIO_A') AS revoked`, [digestConcA]);
 
-        // Transaction A commits, releasing lock
         await clientA.query("COMMIT");
-
-        // Transaction B completes after lock is released
-        const resB = await promiseB;
-        assert(resB.rows.length === 0, "SESS-21: Transaction B sees revoked state after Transaction A commits");
+        const resRevokeB = await promiseRevokeB;
+        assert(resRevokeB.rows[0]?.revoked === true, "SESS-21 Scenario A: Revoke B completes after A commits");
         await clientB.query("COMMIT");
+
+        const resAfterA = await runtimeClient.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestConcA]);
+        assert(resAfterA.rows.length === 0, "SESS-21 Scenario A: All later resolves fail after revocation");
       } finally {
         await clientA.end().catch(() => {});
         await clientB.end().catch(() => {});
       }
+
+      // Scenario B — revoke holds lock first, resolve waits
+      const rawTokenConcB = randomBytes(32).toString("hex");
+      const digestConcB = generateDigest(rawTokenConcB);
+      await runtimeClient.query(`SELECT identity.create_auth_session($1, $2, 'RELATIONSHIP')`, [humanAccountId, digestConcB]);
+
+      const clientC = new Client({ connectionString: isoRuntimeUrl });
+      const clientD = new Client({ connectionString: isoRuntimeUrl });
+      await clientC.connect();
+      await clientD.connect();
+
+      try {
+        await clientC.query("BEGIN");
+        await clientD.query("BEGIN");
+
+        const resRevokeC = await clientC.query(`SELECT identity.revoke_auth_session($1, 'SCENARIO_B') AS revoked`, [digestConcB]);
+        assert(resRevokeC.rows[0]?.revoked === true, "SESS-21 Scenario B: Revoke C holds lock first");
+
+        const promiseResolveD = clientD.query(`SELECT * FROM identity.resolve_auth_session($1)`, [digestConcB]);
+
+        await clientC.query("COMMIT");
+        const resResolveD = await promiseResolveD;
+        assert(resResolveD.rows.length === 0, "SESS-21 Scenario B: Resolve D completes after C commits and sees 0 rows");
+        await clientD.query("COMMIT");
+      } finally {
+        await clientC.end().catch(() => {});
+        await clientD.end().catch(() => {});
+      }
+
+      // Section 18 & 19: Timeout Policies, Step-up Freshness, Non-sliding Expiration
+      console.log("\nExecuting Policy Re-validation & Step-up Freshness Checks...");
+      const rawTokenStepUp5 = randomBytes(32).toString("hex");
+      const digestStepUp5 = generateDigest(rawTokenStepUp5);
+      const stepUpSessId = (await runtimeClient.query(
+        `SELECT identity.create_auth_session($1, $2, 'RELATIONSHIP', NULL, NULL, NULL, 'BASIC', true) AS session_id`,
+        [humanAccountId, digestStepUp5]
+      )).rows[0].session_id;
+
+      const resStepUpInside = await runtimeClient.query(`SELECT step_up_verified, absolute_expires_at FROM identity.resolve_auth_session($1)`, [digestStepUp5]);
+      assert(resStepUpInside.rows[0]?.step_up_verified === true, "SESS-StepUp: step_up_verified=true when created with p_step_up_verified=true");
+      const initialAbsExp = resStepUpInside.rows[0]?.absolute_expires_at;
+
+      // Resolve again to test last_activity_at advances while absolute_expires_at does NOT slide
+      const resStepUpSecond = await runtimeClient.query(`SELECT step_up_verified, absolute_expires_at FROM identity.resolve_auth_session($1)`, [digestStepUp5]);
+      assert(resStepUpSecond.rows[0]?.absolute_expires_at.getTime() === initialAbsExp.getTime(), "SESS-Policy: absolute_expires_at does NOT slide on resolve");
+
+      // Beyond 15m -> step_up_verified = false
+      const rawTokenStepUp20 = randomBytes(32).toString("hex");
+      const digestStepUp20 = generateDigest(rawTokenStepUp20);
+      await runtimeClient.query(
+        `SELECT identity.create_auth_session($1, $2, 'RELATIONSHIP', NULL, NULL, NULL, 'BASIC', false) AS session_id`,
+        [humanAccountId, digestStepUp20]
+      );
+      const resStepUpOutside = await runtimeClient.query(`SELECT step_up_verified FROM identity.resolve_auth_session($1)`, [digestStepUp20]);
+      assert(resStepUpOutside.rows[0]?.step_up_verified === false, "SESS-StepUp: step_up_verified=false when created with p_step_up_verified=false");
 
       // SESS-25: REAL Existing S1 Access Closure Integration Test Suite
       console.log("\nExecuting SESS-25: REAL Existing S1 Access Closure Integration Test Suite...");

@@ -124,6 +124,7 @@ SET search_path = pg_catalog, identity, access, party, security
 SET row_security = off
 AS $$
 DECLARE
+    v_now timestamptz := clock_timestamp();
     v_account_type text;
     v_account_status text;
     v_account_key text;
@@ -198,16 +199,37 @@ BEGIN
             RAISE EXCEPTION 'LOCAL plane requires local_assignment_id only' USING ERRCODE = '28000';
         END IF;
 
-        PERFORM 1 FROM access.scoped_assignments sa
-        WHERE sa.id = p_local_assignment_id
-          AND sa.subject_person_id = v_person_id
-          AND sa.status = 'ACTIVE'
-          AND sa.effective_from <= clock_timestamp()
-          AND (sa.effective_to IS NULL OR sa.effective_to > clock_timestamp());
+        DECLARE
+            v_sa_membership_id uuid;
+            v_sa_org_id uuid;
+        BEGIN
+            SELECT sa.membership_id, sa.organization_id
+            INTO v_sa_membership_id, v_sa_org_id
+            FROM access.scoped_assignments sa
+            WHERE sa.id = p_local_assignment_id
+              AND sa.subject_person_id = v_person_id
+              AND sa.status = 'ACTIVE'
+              AND sa.effective_from <= v_now
+              AND (sa.effective_to IS NULL OR sa.effective_to > v_now);
 
-        IF NOT FOUND THEN
-            RAISE EXCEPTION 'Invalid, inactive, or un-effective local_assignment_id %', p_local_assignment_id USING ERRCODE = '28000';
-        END IF;
+            IF NOT FOUND THEN
+                RAISE EXCEPTION 'Invalid, inactive, or un-effective local_assignment_id %', p_local_assignment_id USING ERRCODE = '28000';
+            END IF;
+
+            IF v_sa_membership_id IS NOT NULL THEN
+                PERFORM 1 FROM access.memberships m
+                WHERE m.id = v_sa_membership_id
+                  AND m.person_id = v_person_id
+                  AND m.organization_id = v_sa_org_id
+                  AND m.status = 'ACTIVE'
+                  AND m.effective_from <= v_now
+                  AND (m.effective_to IS NULL OR m.effective_to > v_now);
+
+                IF NOT FOUND THEN
+                    RAISE EXCEPTION 'Invalid, inactive, or un-effective membership % for local_assignment_id %', v_sa_membership_id, p_local_assignment_id USING ERRCODE = '28000';
+                END IF;
+            END IF;
+        END;
 
         v_absolute_ttl := INTERVAL '8 hours';
     ELSIF p_authority_plane = 'PLATFORM' THEN
@@ -219,8 +241,8 @@ BEGIN
         WHERE pa.id = p_platform_assignment_id
           AND pa.subject_person_id = v_person_id
           AND pa.status = 'ACTIVE'
-          AND pa.effective_from <= clock_timestamp()
-          AND (pa.effective_to IS NULL OR pa.effective_to > clock_timestamp());
+          AND pa.effective_from <= v_now
+          AND (pa.effective_to IS NULL OR pa.effective_to > v_now);
 
         IF NOT FOUND THEN
             RAISE EXCEPTION 'Invalid, inactive, or un-effective platform_assignment_id %', p_platform_assignment_id USING ERRCODE = '28000';
@@ -236,8 +258,8 @@ BEGIN
         WHERE spg.id = p_service_grant_id
           AND spg.subject_account_id = p_account_id
           AND spg.status = 'ACTIVE'
-          AND spg.effective_from <= clock_timestamp()
-          AND (spg.effective_to IS NULL OR spg.effective_to > clock_timestamp());
+          AND spg.effective_from <= v_now
+          AND (spg.effective_to IS NULL OR spg.effective_to > v_now);
 
         IF NOT FOUND THEN
             RAISE EXCEPTION 'Invalid, inactive, or un-effective service_grant_id %', p_service_grant_id USING ERRCODE = '28000';
@@ -248,10 +270,10 @@ BEGIN
         RAISE EXCEPTION 'Invalid authority_plane: %', p_authority_plane USING ERRCODE = '28000';
     END IF;
 
-    v_absolute_expires_at := clock_timestamp() + v_absolute_ttl;
+    v_absolute_expires_at := v_now + v_absolute_ttl;
 
     IF p_step_up_verified IS TRUE THEN
-        v_step_up_verified_at := clock_timestamp();
+        v_step_up_verified_at := v_now;
     ELSE
         v_step_up_verified_at := NULL;
     END IF;
@@ -281,8 +303,8 @@ BEGIN
         p_token_digest,
         p_auth_assurance_level,
         v_step_up_verified_at,
-        clock_timestamp(),
-        clock_timestamp(),
+        v_now,
+        v_now,
         v_absolute_expires_at,
         p_rotated_from_session_id,
         'EPH'
@@ -303,7 +325,7 @@ BEGIN
         v_account_key,
         v_person_key,
         v_session_id::text,
-        'SEC'
+        'EPH'
     );
 
     RETURN v_session_id;
@@ -371,6 +393,7 @@ SET search_path = pg_catalog, identity, access, party, security, organization, p
 SET row_security = off
 AS $$
 DECLARE
+    v_now timestamptz := clock_timestamp();
     v_rec RECORD;
     v_account_type text;
     v_account_status text;
@@ -392,6 +415,7 @@ DECLARE
     v_ws_key text;
     v_prov_id uuid;
     v_prov_key text;
+    v_chan_id uuid;
     v_chan_code text;
     v_reg_id uuid;
     v_reg_key text;
@@ -412,7 +436,7 @@ BEGIN
         RETURN;
     END IF;
 
-    IF clock_timestamp() >= v_rec.absolute_expires_at THEN
+    IF v_now >= v_rec.absolute_expires_at THEN
         RETURN;
     END IF;
 
@@ -423,7 +447,7 @@ BEGIN
         v_idle_ttl := INTERVAL '15 minutes';
     END IF;
 
-    IF clock_timestamp() >= (v_rec.last_activity_at + v_idle_ttl) THEN
+    IF v_now >= (v_rec.last_activity_at + v_idle_ttl) THEN
         RETURN;
     END IF;
 
@@ -475,10 +499,10 @@ BEGIN
         END IF;
 
         -- Validate effective period
-        IF clock_timestamp() < v_eff_from THEN
+        IF v_now < v_eff_from THEN
             RETURN;
         END IF;
-        IF v_eff_to IS NOT NULL AND clock_timestamp() > v_eff_to THEN
+        IF v_eff_to IS NOT NULL AND v_now > v_eff_to THEN
             RETURN;
         END IF;
 
@@ -502,71 +526,73 @@ BEGIN
             SELECT m.status, m.seed_key, m.effective_from, m.effective_to
             INTO v_ass_status, v_membership_key, v_eff_from, v_eff_to
             FROM access.memberships m
-            WHERE m.id = v_membership_id;
+            WHERE m.id = v_membership_id
+              AND m.person_id = v_person_id
+              AND m.organization_id = v_org_id;
 
             IF v_ass_status IS NULL OR v_ass_status != 'ACTIVE' THEN
                 RETURN;
             END IF;
-            IF clock_timestamp() < v_eff_from THEN
+            IF v_now < v_eff_from THEN
                 RETURN;
             END IF;
-            IF v_eff_to IS NOT NULL AND clock_timestamp() > v_eff_to THEN
+            IF v_eff_to IS NOT NULL AND v_now > v_eff_to THEN
                 RETURN;
             END IF;
         END IF;
 
     ELSIF v_rec.authority_plane = 'PLATFORM' THEN
         SELECT pa.status, pa.channel_id, pa.region_id, pa.assignment_key, pa.effective_from, pa.effective_to
-        INTO v_ass_status, v_chan_code, v_reg_id, v_platform_assignment_key, v_eff_from, v_eff_to
+        INTO v_ass_status, v_chan_id, v_reg_id, v_platform_assignment_key, v_eff_from, v_eff_to
         FROM access.platform_assignments pa
         WHERE pa.id = v_rec.platform_assignment_id AND pa.subject_person_id = v_person_id;
 
         IF v_ass_status IS NULL OR v_ass_status != 'ACTIVE' THEN
             RETURN;
         END IF;
-        IF clock_timestamp() < v_eff_from THEN
+        IF v_now < v_eff_from THEN
             RETURN;
         END IF;
-        IF v_eff_to IS NOT NULL AND clock_timestamp() > v_eff_to THEN
+        IF v_eff_to IS NOT NULL AND v_now > v_eff_to THEN
             RETURN;
         END IF;
 
         -- Resolve channel code if channel_id stored as UUID reference
-        IF v_chan_code IS NOT NULL THEN
-            SELECT c.code INTO v_chan_code FROM listing.channels c WHERE c.id::text = v_chan_code OR c.code = v_chan_code;
+        IF v_chan_id IS NOT NULL THEN
+            SELECT c.code INTO v_chan_code FROM listing.channels c WHERE c.id = v_chan_id;
         END IF;
 
         IF v_reg_id IS NOT NULL THEN
-            SELECT r.seed_key INTO v_reg_key FROM geo.regions r WHERE r.id = v_reg_id;
+            SELECT COALESCE(r.seed_key, r.key) INTO v_reg_key FROM geo.regions r WHERE r.id = v_reg_id;
         END IF;
 
     ELSIF v_rec.authority_plane = 'SERVICE' THEN
         SELECT spg.status, spg.channel_id, spg.region_id, spg.grant_key, spg.effective_from, spg.effective_to
-        INTO v_ass_status, v_chan_code, v_reg_id, v_service_grant_key, v_eff_from, v_eff_to
+        INTO v_ass_status, v_chan_id, v_reg_id, v_service_grant_key, v_eff_from, v_eff_to
         FROM access.service_principal_grants spg
         WHERE spg.id = v_rec.service_grant_id AND spg.subject_account_id = v_rec.account_id;
 
         IF v_ass_status IS NULL OR v_ass_status != 'ACTIVE' THEN
             RETURN;
         END IF;
-        IF clock_timestamp() < v_eff_from THEN
+        IF v_now < v_eff_from THEN
             RETURN;
         END IF;
-        IF v_eff_to IS NOT NULL AND clock_timestamp() > v_eff_to THEN
+        IF v_eff_to IS NOT NULL AND v_now > v_eff_to THEN
             RETURN;
         END IF;
 
-        IF v_chan_code IS NOT NULL THEN
-            SELECT c.code INTO v_chan_code FROM listing.channels c WHERE c.id::text = v_chan_code OR c.code = v_chan_code;
+        IF v_chan_id IS NOT NULL THEN
+            SELECT c.code INTO v_chan_code FROM listing.channels c WHERE c.id = v_chan_id;
         END IF;
 
         IF v_reg_id IS NOT NULL THEN
-            SELECT r.seed_key INTO v_reg_key FROM geo.regions r WHERE r.id = v_reg_id;
+            SELECT COALESCE(r.seed_key, r.key) INTO v_reg_key FROM geo.regions r WHERE r.id = v_reg_id;
         END IF;
     END IF;
 
-    -- Evaluate Step-up Freshness (<= 15 minutes)
-    IF v_rec.step_up_verified_at IS NOT NULL AND v_rec.step_up_verified_at > (clock_timestamp() - INTERVAL '15 minutes') THEN
+    -- Evaluate Step-up Freshness (step_up_verified_at >= now - interval '15 minutes')
+    IF v_rec.step_up_verified_at IS NOT NULL AND v_rec.step_up_verified_at >= (v_now - INTERVAL '15 minutes') THEN
         v_step_up_verified := true;
     ELSE
         v_step_up_verified := false;
@@ -574,8 +600,8 @@ BEGIN
 
     -- Atomically update last_activity_at (absolute_expires_at does NOT slide)
     UPDATE identity.auth_sessions
-    SET last_activity_at = clock_timestamp(),
-        updated_at = clock_timestamp()
+    SET last_activity_at = v_now,
+        updated_at = v_now
     WHERE id = v_rec.id;
 
     RETURN QUERY
