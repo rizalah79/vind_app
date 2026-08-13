@@ -2,7 +2,7 @@
 -- Scope: WS02 Identity Server-Side Opaque Session Persistence (Hardened)
 
 -- 1. Create table identity.auth_sessions
-CREATE TABLE identity.auth_sessions (
+CREATE TABLE IF NOT EXISTS identity.auth_sessions (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     account_id uuid NOT NULL REFERENCES identity.accounts(id) ON DELETE RESTRICT,
     identity_link_id uuid REFERENCES identity.identity_links(id) ON DELETE RESTRICT,
@@ -40,10 +40,10 @@ CREATE TABLE identity.auth_sessions (
 );
 
 -- 2. Indexes
-CREATE INDEX idx_auth_sessions_account_id ON identity.auth_sessions(account_id);
-CREATE INDEX idx_auth_sessions_revoked ON identity.auth_sessions(revoked_at) WHERE revoked_at IS NOT NULL;
-CREATE INDEX idx_auth_sessions_active ON identity.auth_sessions(account_id) WHERE revoked_at IS NULL;
-CREATE UNIQUE INDEX idx_auth_sessions_rotated_from_unique ON identity.auth_sessions(rotated_from_session_id) WHERE rotated_from_session_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_account_id ON identity.auth_sessions(account_id);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_revoked ON identity.auth_sessions(revoked_at) WHERE revoked_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_active ON identity.auth_sessions(account_id) WHERE revoked_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_sessions_rotated_from_unique ON identity.auth_sessions(rotated_from_session_id) WHERE rotated_from_session_id IS NOT NULL;
 
 -- 3. Immutability Guard Trigger
 DROP FUNCTION IF EXISTS identity.trg_auth_sessions_immutable_guard() CASCADE;
@@ -325,7 +325,7 @@ BEGIN
         v_account_key,
         v_person_key,
         v_session_id::text,
-        'EPH'
+        'SEC'
     );
 
     RETURN v_session_id;
@@ -502,7 +502,7 @@ BEGIN
         IF v_now < v_eff_from THEN
             RETURN;
         END IF;
-        IF v_eff_to IS NOT NULL AND v_now > v_eff_to THEN
+        IF v_eff_to IS NOT NULL AND v_now >= v_eff_to THEN
             RETURN;
         END IF;
 
@@ -528,7 +528,7 @@ BEGIN
             FROM access.memberships m
             WHERE m.id = v_membership_id
               AND m.person_id = v_person_id
-              AND m.organization_id = v_org_id;
+              AND (v_org_id IS NULL OR m.organization_id = v_org_id);
 
             IF v_ass_status IS NULL OR v_ass_status != 'ACTIVE' THEN
                 RETURN;
@@ -536,7 +536,7 @@ BEGIN
             IF v_now < v_eff_from THEN
                 RETURN;
             END IF;
-            IF v_eff_to IS NOT NULL AND v_now > v_eff_to THEN
+            IF v_eff_to IS NOT NULL AND v_now >= v_eff_to THEN
                 RETURN;
             END IF;
         END IF;
@@ -553,7 +553,7 @@ BEGIN
         IF v_now < v_eff_from THEN
             RETURN;
         END IF;
-        IF v_eff_to IS NOT NULL AND v_now > v_eff_to THEN
+        IF v_eff_to IS NOT NULL AND v_now >= v_eff_to THEN
             RETURN;
         END IF;
 
@@ -578,7 +578,7 @@ BEGIN
         IF v_now < v_eff_from THEN
             RETURN;
         END IF;
-        IF v_eff_to IS NOT NULL AND v_now > v_eff_to THEN
+        IF v_eff_to IS NOT NULL AND v_now >= v_eff_to THEN
             RETURN;
         END IF;
 
@@ -901,63 +901,5 @@ GRANT EXECUTE ON FUNCTION identity.revoke_auth_session(bytea, text) TO vind_app_
 GRANT EXECUTE ON FUNCTION identity.revoke_account_sessions(bytea, text, boolean) TO vind_app_runtime;
 GRANT EXECUTE ON FUNCTION identity.rotate_auth_session(bytea, bytea, text, uuid, uuid, uuid, text, boolean, text) TO vind_app_runtime;
 
--- 15. Forward-Fix for verification.read_evidence Data Access Log Array Type
-CREATE OR REPLACE FUNCTION verification.read_evidence(p_evidence_id uuid, p_purpose_code text)
- RETURNS TABLE(id uuid, evidence_type text, document_number_masked text, storage_path_encrypted text, status text)
- LANGUAGE plpgsql
- SECURITY DEFINER
- SET search_path TO 'pg_catalog', 'verification', 'security', 'access'
- SET row_security TO 'off'
-AS $function$
-DECLARE
-    v_actor_person_id uuid;
-    v_actor_account_id uuid;
-    v_acting_assignment_key text;
-    v_correlation_id text;
-    v_request_id text;
-    v_authorized boolean := false;
-BEGIN
-    v_actor_person_id := security.current_actor_person_id();
-    v_actor_account_id := security.current_actor_account_id();
-    v_acting_assignment_key := security.context_value('platform_assignment_key');
-    v_correlation_id := security.context_value('correlation_id');
-    v_request_id := security.context_value('request_id');
 
-    IF v_actor_person_id IS NULL THEN
-        RAISE EXCEPTION 'Authentication required.' USING ERRCODE = '42501';
-    END IF;
-
-    IF NOT EXISTS (
-        SELECT 1 FROM verification.verification_evidence ve WHERE ve.id = p_evidence_id
-    ) THEN
-        RAISE EXCEPTION 'Verification evidence not found.' USING ERRCODE = '23503';
-    END IF;
-
-    IF access.has_platform_capability('verification.evidence.read') THEN
-        v_authorized := true;
-    END IF;
-
-    IF NOT v_authorized THEN
-        RAISE EXCEPTION 'Unauthorized to read verification evidence.' USING ERRCODE = '42501';
-    END IF;
-
-    INSERT INTO security.data_access_logs (
-        actor_account_key, actor_person_key, acting_assignment_key,
-        purpose_code, access_type, target_schema, target_relation, target_key,
-        fields_accessed, result_count, correlation_id, request_id
-    ) VALUES (
-        v_actor_account_id::text, v_actor_person_id::text, v_acting_assignment_key,
-        p_purpose_code, 'READ', 'verification', 'verification_evidence', p_evidence_id::text,
-        ARRAY['id', 'evidence_type', 'document_number_masked', 'storage_path_encrypted', 'status'],
-        1, v_correlation_id, v_request_id
-    );
-
-    RETURN QUERY
-    SELECT ve.id, ve.evidence_type, ve.document_number_masked, ve.storage_path_encrypted, ve.status
-    FROM verification.verification_evidence ve
-    WHERE ve.id = p_evidence_id;
-END;
-$function$;
-
-GRANT EXECUTE ON FUNCTION verification.read_evidence(uuid, text) TO vind_app_runtime;
 
