@@ -160,66 +160,6 @@ async function runSessionTestHarness() {
     await seedClient.query(smk2Sql);
     await seedClient.query(mediaSql);
 
-    // Apply isolated test DB DDL fix for verification.read_evidence (without modifying migration.sql)
-    await seedClient.query(`
-      CREATE OR REPLACE FUNCTION verification.read_evidence(p_evidence_id uuid, p_purpose_code text)
-       RETURNS TABLE(id uuid, evidence_type text, document_number_masked text, storage_path_encrypted text, status text)
-       LANGUAGE plpgsql
-       SECURITY DEFINER
-       SET search_path TO 'pg_catalog', 'verification', 'security', 'access'
-       SET row_security TO 'off'
-      AS $function$
-      DECLARE
-          v_actor_person_id uuid;
-          v_actor_account_id uuid;
-          v_acting_assignment_key text;
-          v_correlation_id text;
-          v_request_id text;
-          v_authorized boolean := false;
-      BEGIN
-          v_actor_person_id := security.current_actor_person_id();
-          v_actor_account_id := security.current_actor_account_id();
-          v_acting_assignment_key := security.context_value('platform_assignment_key');
-          v_correlation_id := security.context_value('correlation_id');
-          v_request_id := security.context_value('request_id');
-
-          IF v_actor_person_id IS NULL THEN
-              RAISE EXCEPTION 'Authentication required.' USING ERRCODE = '42501';
-          END IF;
-
-          IF NOT EXISTS (
-              SELECT 1 FROM verification.verification_evidence ve WHERE ve.id = p_evidence_id
-          ) THEN
-              RAISE EXCEPTION 'Verification evidence not found.' USING ERRCODE = '23503';
-          END IF;
-
-          IF access.has_platform_capability('verification.evidence.read') THEN
-              v_authorized := true;
-          END IF;
-
-          IF NOT v_authorized THEN
-              RAISE EXCEPTION 'Unauthorized to read verification evidence.' USING ERRCODE = '42501';
-          END IF;
-
-          INSERT INTO security.data_access_logs (
-              actor_account_key, actor_person_key, acting_assignment_key,
-              purpose_code, access_type, target_schema, target_relation, target_key,
-              fields_accessed, result_count, correlation_id, request_id
-          ) VALUES (
-              v_actor_account_id::text, v_actor_person_id::text, v_acting_assignment_key,
-              p_purpose_code, 'READ', 'verification', 'verification_evidence', p_evidence_id::text,
-              ARRAY['id', 'evidence_type', 'document_number_masked', 'storage_path_encrypted', 'status'],
-              1, v_correlation_id, v_request_id
-          );
-
-          RETURN QUERY
-          SELECT ve.id, ve.evidence_type, ve.document_number_masked, ve.storage_path_encrypted, ve.status
-          FROM verification.verification_evidence ve
-          WHERE ve.id = p_evidence_id;
-      END;
-      $function$;
-    `);
-
     // Insert synthetic SERVICE account & grant fixture if not present
     await seedClient.query(`
       INSERT INTO identity.accounts (seed_key, account_type, status, data_origin_code, source_reference)
@@ -276,6 +216,7 @@ async function runSessionTestHarness() {
       const serviceAccountId = serviceAccRes.rows[0].account_id;
       const serviceGrantId = serviceAccRes.rows[0].grant_id;
       const serviceGrantKey = serviceAccRes.rows[0].grant_key;
+      const serviceAccountKey = serviceAccRes.rows[0].account_key;
 
       // SESS-11 Fixture: Explicit membership-backed LOCAL assignment required (membership_id IS NOT NULL)
       const localAssRes = await bootstrapClient.query(`
@@ -851,6 +792,60 @@ async function runSessionTestHarness() {
         }
       }
 
+      // Explicit canonical key assertions for HUMAN and SERVICE events (Requirement 5)
+      const humanCreatedEv = (await bootstrapClient.query(
+        `SELECT actor_account_key, actor_person_key FROM security.security_events WHERE event_type = 'AUTH_SESSION_CREATED' AND subject_key = $1`,
+        [humanSessionId]
+      )).rows[0];
+      assert(humanCreatedEv?.actor_account_key === humanAccountKey, "SESS-19: HUMAN AUTH_SESSION_CREATED actor_account_key matches canonical account_key");
+      assert(humanCreatedEv?.actor_person_key === humanPersonKey, "SESS-19: HUMAN AUTH_SESSION_CREATED actor_person_key matches canonical person_key");
+
+      const serviceCreatedEv = (await bootstrapClient.query(
+        `SELECT actor_account_key, actor_person_key FROM security.security_events WHERE event_type = 'AUTH_SESSION_CREATED' AND subject_key = $1`,
+        [serviceSessionId]
+      )).rows[0];
+      assert(serviceCreatedEv?.actor_account_key === serviceAccountKey, "SESS-19: SERVICE AUTH_SESSION_CREATED actor_account_key matches canonical account_key");
+      assert(serviceCreatedEv?.actor_person_key === null, "SESS-19: SERVICE AUTH_SESSION_CREATED actor_person_key is NULL");
+
+      const humanRevokedEv = (await bootstrapClient.query(
+        `SELECT actor_account_key, actor_person_key FROM security.security_events WHERE event_type = 'AUTH_SESSION_REVOKED' AND subject_key = $1`,
+        [humanSessionId]
+      )).rows[0];
+      assert(humanRevokedEv?.actor_account_key === humanAccountKey, "SESS-19: HUMAN AUTH_SESSION_REVOKED actor_account_key matches canonical account_key");
+      assert(humanRevokedEv?.actor_person_key === humanPersonKey, "SESS-19: HUMAN AUTH_SESSION_REVOKED actor_person_key matches canonical person_key");
+
+      const serviceRotatedEv = (await bootstrapClient.query(
+        `SELECT actor_account_key, actor_person_key FROM security.security_events WHERE event_type = 'AUTH_SESSION_ROTATED' AND subject_key = $1`,
+        [newRotSessId]
+      )).rows[0];
+      assert(serviceRotatedEv?.actor_account_key === serviceAccountKey, "SESS-19: SERVICE AUTH_SESSION_ROTATED actor_account_key matches canonical account_key");
+      assert(serviceRotatedEv?.actor_person_key === null, "SESS-19: SERVICE AUTH_SESSION_ROTATED actor_person_key is NULL");
+
+      const serviceAccountRevokedEv = (await bootstrapClient.query(
+        `SELECT actor_account_key, actor_person_key FROM security.security_events WHERE event_type = 'AUTH_ACCOUNT_SESSIONS_REVOKED' AND subject_key = $1 LIMIT 1`,
+        [serviceAccountKey]
+      )).rows[0];
+      assert(serviceAccountRevokedEv?.actor_account_key === serviceAccountKey, "SESS-19: SERVICE AUTH_ACCOUNT_SESSIONS_REVOKED actor_account_key matches canonical account_key");
+      assert(serviceAccountRevokedEv?.actor_person_key === null, "SESS-19: SERVICE AUTH_ACCOUNT_SESSIONS_REVOKED actor_person_key is NULL");
+
+      // Test HUMAN account-wide logout for SESS-19 assertion
+      const rawHumanAcc1 = randomBytes(32).toString("hex");
+      const digestHumanAcc1 = generateDigest(rawHumanAcc1);
+      await runtimeClient.query(
+        `SELECT identity.create_auth_session($1, $2, 'RELATIONSHIP')`,
+        [humanAccountId, digestHumanAcc1]
+      );
+      await runtimeClient.query(
+        `SELECT identity.revoke_account_sessions($1, 'SECURITY_LOGOUT', false)`,
+        [digestHumanAcc1]
+      );
+      const humanAccountRevokedEv = (await bootstrapClient.query(
+        `SELECT actor_account_key, actor_person_key FROM security.security_events WHERE event_type = 'AUTH_ACCOUNT_SESSIONS_REVOKED' AND subject_key = $1 ORDER BY id DESC LIMIT 1`,
+        [humanAccountKey]
+      )).rows[0];
+      assert(humanAccountRevokedEv?.actor_account_key === humanAccountKey, "SESS-19: HUMAN AUTH_ACCOUNT_SESSIONS_REVOKED actor_account_key matches canonical account_key");
+      assert(humanAccountRevokedEv?.actor_person_key === humanPersonKey, "SESS-19: HUMAN AUTH_ACCOUNT_SESSIONS_REVOKED actor_person_key matches canonical person_key");
+
       // SESS-20: Retention Purge Function, Batch Limit (2 then 1) & Retention Logic
       console.log("\nExecuting SESS-20: Retention Purge & Batch Limit (2 then 1)...");
       const oldRaw1 = randomBytes(32).toString("hex");
@@ -1199,7 +1194,7 @@ async function runSessionTestHarness() {
 
       const timeBefore = new Date(rowBefore.last_activity_at).getTime();
       const timeAfter = new Date(rowAfter.last_activity_at).getTime();
-      assert(timeAfter >= timeBefore, "SESS-LastActivity: last_activity_at advances on successful resolve");
+      assert(timeAfter > timeBefore, "SESS-LastActivity: last_activity_at advances on successful resolve");
 
       const absBefore = new Date(rowBefore.absolute_expires_at).getTime();
       const absAfter = new Date(rowAfter.absolute_expires_at).getTime();
