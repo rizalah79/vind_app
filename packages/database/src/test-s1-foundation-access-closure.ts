@@ -23,10 +23,10 @@ function assertLocal(urlText: string, label: string): void {
   if (
     !["127.0.0.1", "localhost"].includes(url.hostname) ||
     effectivePort !== "5432" ||
-    url.pathname !== "/vind_app_dev"
+    (!url.pathname.startsWith("/vind_app_dev") && !url.pathname.startsWith("/vind_app_accept_"))
   ) {
     throw new Error(
-      `${label} must target localhost:5432/vind_app_dev`
+      `${label} must target local database`
     );
   }
 }
@@ -1494,7 +1494,7 @@ async function main(): Promise<void> {
         admin,
         `SELECT current_database()::text`
       ),
-      "vind_app_dev",
+      process.env.POSTGRES_DB || "vind_app_dev",
       "admin database identity"
     );
 

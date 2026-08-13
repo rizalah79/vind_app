@@ -30,7 +30,8 @@
                     "seed:dec021":  "tsx src/seed-dec021.ts apply",
                     "seed:dec021:verify":  "tsx src/seed-dec021.ts verify",
                     "test:dec021": "tsx src/test-dec021-harness.ts",
-                    "test": "npm run check && npm run test:dec021"
+                    "test:session": "tsx src/test-session-persistence.ts",
+                    "test": "npm run check && npm run test:dec021 && npm run test:session"
                 },
     "dependencies":  {
                          "@prisma/adapter-pg":  "7.9.1",
