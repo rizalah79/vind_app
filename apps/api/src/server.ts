@@ -1,40 +1,64 @@
 import { Client } from "pg";
 import { buildApp } from "./app.js";
-import { PostgresSessionStore } from "./auth/postgres-session-store.js";
+import type { ReadinessDependency } from "./readiness.js";
+import { PostgresSessionStore, type DatabaseClient } from "./auth/postgres-session-store.js";
 import { parseChannelHostConfigFromEnv, validateChannelHostConfig } from "./auth/channel.js";
 
-const port = Number.parseInt(process.env.PORT ?? "3001", 10);
-const host = process.env.HOST ?? "0.0.0.0";
-
-const databaseUrl = process.env.DATABASE_URL;
-let dbClient: Client | undefined;
-let sessionStore: PostgresSessionStore | undefined;
-
-if (databaseUrl) {
-  dbClient = new Client({ connectionString: databaseUrl });
-  await dbClient.connect();
-  sessionStore = new PostgresSessionStore(dbClient);
+export interface BuildProductionAppOptions {
+  env?: Record<string, string | undefined> | undefined;
+  dbClient?: DatabaseClient | undefined;
+  readinessDependencies?: readonly ReadinessDependency[] | undefined;
 }
 
-const channelHostConfig = parseChannelHostConfigFromEnv();
-validateChannelHostConfig(channelHostConfig);
+export async function buildProductionApp(options: BuildProductionAppOptions = {}) {
+  const env = options.env ?? process.env;
+  const databaseUrl = env.DATABASE_URL;
 
-const app = buildApp({
-  ...(sessionStore && channelHostConfig.vindzamAllowedHosts.length > 0 ? { sessionStore, channelHostConfig } : {})
-});
-
-if (dbClient) {
-  app.addHook("onClose", async () => {
-    await dbClient?.end().catch(() => {});
-  });
-}
-
-try {
-  await app.listen({ host, port });
-} catch (error) {
-  app.log.error(error);
-  if (dbClient) {
-    await dbClient.end().catch(() => {});
+  if (!databaseUrl || !databaseUrl.trim()) {
+    throw new Error("FATAL: DATABASE_URL environment variable is required for production API startup with B2 persistent session store.");
   }
-  process.exit(1);
+
+  const channelHostConfig = parseChannelHostConfigFromEnv(env);
+  validateChannelHostConfig(channelHostConfig);
+
+  let dbClient: DatabaseClient;
+  let shouldCloseDb = false;
+
+  if (options.dbClient) {
+    dbClient = options.dbClient;
+  } else {
+    const client = new Client({ connectionString: databaseUrl });
+    await client.connect();
+    dbClient = client;
+    shouldCloseDb = true;
+  }
+
+  const sessionStore = new PostgresSessionStore(dbClient);
+
+  const app = buildApp({
+    sessionStore,
+    channelHostConfig,
+    ...(options.readinessDependencies ? { readinessDependencies: options.readinessDependencies } : {})
+  });
+
+  if (shouldCloseDb && "end" in dbClient && typeof (dbClient as any).end === "function") {
+    app.addHook("onClose", async () => {
+      await (dbClient as any).end().catch(() => {});
+    });
+  }
+
+  return app;
+}
+
+if (process.argv[1] && (process.argv[1].endsWith("server.js") || process.argv[1].endsWith("server.ts"))) {
+  const port = Number.parseInt(process.env.PORT ?? "3001", 10);
+  const host = process.env.HOST ?? "0.0.0.0";
+
+  try {
+    const app = await buildProductionApp();
+    await app.listen({ host, port });
+  } catch (error) {
+    console.error("Failed to start production server:", error);
+    process.exit(1);
+  }
 }

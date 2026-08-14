@@ -56,6 +56,13 @@ export function parseChannelHostConfigFromEnv(
 }
 
 export function validateChannelHostConfig(config: ChannelHostConfig): void {
+  if (!config || !Array.isArray(config.vindzamAllowedHosts) || config.vindzamAllowedHosts.length === 0) {
+    throw new Error("VINDZAM host configuration is required and cannot be empty.");
+  }
+  if (!Array.isArray(config.vindlokaAllowedHosts) || config.vindlokaAllowedHosts.length === 0) {
+    throw new Error("VINDLOKA host configuration is required and cannot be empty.");
+  }
+
   const vindzamSet = new Set(config.vindzamAllowedHosts.map(normalizeHost));
   const vindlokaSet = new Set(config.vindlokaAllowedHosts.map(normalizeHost));
 

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createPrismaClient } from "@vind/database";
 import { buildApp } from "./app.js";
+import { buildProductionApp } from "./server.js";
 import { buildSessionCookieHeader, type ResolvedSessionContext, type SessionStore } from "./auth/session.js";
 import { PostgresSessionStore, type DatabaseClient } from "./auth/postgres-session-store.js";
 import { type ChannelHostConfig } from "./auth/channel.js";
@@ -544,5 +545,94 @@ describe("B2 — Authentication + Request Context V2 (Remediated)", () => {
     } finally {
       await db.$disconnect();
     }
+  });
+
+  describe("Production Server Composition Fail-Closed Tests", () => {
+    it("fails startup when DATABASE_URL environment variable is missing", async () => {
+      await assert.rejects(
+        async () => {
+          await buildProductionApp({
+            env: {
+              VINDZAM_ALLOWED_HOSTS: "vindzam.test",
+              VINDLOKA_ALLOWED_HOSTS: "vindloka.test"
+            }
+          });
+        },
+        (err: any) =>
+          err instanceof Error &&
+          err.message.includes("DATABASE_URL environment variable is required")
+      );
+    });
+
+    it("fails startup when VINDZAM_ALLOWED_HOSTS is missing or empty", async () => {
+      const mockDb: DatabaseClient = { async query() { return { rows: [] }; } };
+      await assert.rejects(
+        async () => {
+          await buildProductionApp({
+            env: {
+              DATABASE_URL: "postgresql://vind_user:pass@localhost:5432/vind_db",
+              VINDLOKA_ALLOWED_HOSTS: "vindloka.test"
+            },
+            dbClient: mockDb
+          });
+        },
+        (err: any) =>
+          err instanceof Error &&
+          err.message.includes("VINDZAM host configuration is required")
+      );
+    });
+
+    it("fails startup when VINDLOKA_ALLOWED_HOSTS is missing or empty", async () => {
+      const mockDb: DatabaseClient = { async query() { return { rows: [] }; } };
+      await assert.rejects(
+        async () => {
+          await buildProductionApp({
+            env: {
+              DATABASE_URL: "postgresql://vind_user:pass@localhost:5432/vind_db",
+              VINDZAM_ALLOWED_HOSTS: "vindzam.test"
+            },
+            dbClient: mockDb
+          });
+        },
+        (err: any) =>
+          err instanceof Error &&
+          err.message.includes("VINDLOKA host configuration is required")
+      );
+    });
+
+    it("successfully wires persistent session store and enables auth routes when configured properly", async () => {
+      const mockDb: DatabaseClient = {
+        async query(): Promise<{ rows: any[] }> {
+          return { rows: [] };
+        }
+      };
+
+      const app = await buildProductionApp({
+        env: {
+          DATABASE_URL: "postgresql://vind_user:pass@localhost:5432/vind_db",
+          VINDZAM_ALLOWED_HOSTS: "vindzam.test",
+          VINDLOKA_ALLOWED_HOSTS: "vindloka.test"
+        },
+        dbClient: mockDb,
+        readinessDependencies: [{ name: "mock", check: async () => {} }]
+      });
+
+      // Unauthenticated request to /api/v1/me returns 401 AUTHENTICATION_REQUIRED (auth routes are active!)
+      const meRes = await app.inject({
+        method: "GET",
+        url: "/api/v1/me",
+        headers: { Host: "vindzam.test" }
+      });
+      assert.equal(meRes.statusCode, 401);
+      assert.equal(meRes.json().code, "AUTHENTICATION_REQUIRED");
+
+      // Unauthenticated request to /api/v1/session/logout returns 401 AUTHENTICATION_REQUIRED
+      const logoutRes = await app.inject({
+        method: "POST",
+        url: "/api/v1/session/logout"
+      });
+      assert.equal(logoutRes.statusCode, 401);
+      assert.equal(logoutRes.json().code, "AUTHENTICATION_REQUIRED");
+    });
   });
 });
