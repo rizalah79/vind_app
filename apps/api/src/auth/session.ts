@@ -1,13 +1,9 @@
-import { randomBytes } from "node:crypto";
-
-export interface SessionData {
+export interface ResolvedSessionContext {
   sessionId: string;
   accountKey: string;
   personKey?: string | null;
   actorKind: "HUMAN" | "SERVICE";
   authorityPlane: "RELATIONSHIP" | "LOCAL" | "PLATFORM" | "SERVICE";
-  authAssuranceLevel: string;
-  stepUpVerified: boolean;
   membershipKey?: string | null;
   localAssignmentKey?: string | null;
   platformAssignmentKey?: string | null;
@@ -15,65 +11,17 @@ export interface SessionData {
   organizationKey?: string | null;
   workspaceKey?: string | null;
   providerKey?: string | null;
-  createdAt: Date;
-  expiresAt: Date;
-  revokedAt: Date | null;
+  authorityChannelCode?: string | null;
+  regionKey?: string | null;
+  authAssuranceLevel: string;
+  stepUpVerified: boolean;
+  absoluteExpiresAt: Date;
 }
 
 export interface SessionStore {
-  createSession(
-    data: Omit<SessionData, "sessionId" | "createdAt" | "expiresAt" | "revokedAt">,
-    ttlMs?: number
-  ): Promise<SessionData>;
-  getSession(sessionId: string): Promise<SessionData | null>;
-  revokeSession(sessionId: string): Promise<boolean>;
-  clear(): Promise<void>;
+  resolveSession(rawToken: string): Promise<ResolvedSessionContext | null>;
+  revokeSession(rawToken: string, reasonCode?: string): Promise<boolean>;
 }
-
-export class InMemorySessionStore implements SessionStore {
-  private sessions = new Map<string, SessionData>();
-
-  async createSession(
-    data: Omit<SessionData, "sessionId" | "createdAt" | "expiresAt" | "revokedAt">,
-    ttlMs: number = 86400000 // 24 hours
-  ): Promise<SessionData> {
-    const sessionId = `vses_${randomBytes(24).toString("hex")}`;
-    const now = new Date();
-    const session: SessionData = {
-      ...data,
-      sessionId,
-      createdAt: now,
-      expiresAt: new Date(now.getTime() + ttlMs),
-      revokedAt: null
-    };
-
-    this.sessions.set(sessionId, session);
-    return session;
-  }
-
-  async getSession(sessionId: string): Promise<SessionData | null> {
-    const session = this.sessions.get(sessionId);
-    if (!session) return null;
-    if (session.revokedAt) return null;
-    if (session.expiresAt.getTime() <= Date.now()) return null;
-
-    return session;
-  }
-
-  async revokeSession(sessionId: string): Promise<boolean> {
-    const session = this.sessions.get(sessionId);
-    if (!session || session.revokedAt) return false;
-
-    session.revokedAt = new Date();
-    return true;
-  }
-
-  async clear(): Promise<void> {
-    this.sessions.clear();
-  }
-}
-
-export const defaultSessionStore = new InMemorySessionStore();
 
 export const sessionCookieName = "vind_session" as const;
 

@@ -73,19 +73,28 @@ export async function assertCanonicalCapability(
 export async function validateProviderStatusTransitionAuthority(
   tx: Prisma.TransactionClient,
   authorityPlane: AuthorityPlane,
-  providerId: string
+  providerId: string,
+  stepUpVerified?: boolean
 ): Promise<void> {
   await assertCanonicalCapability(tx, authorityPlane, {
     capabilityCode: "provider.status.transition",
     scopeType: "PROVIDER",
     providerId
   });
+
+  if (!stepUpVerified) {
+    throw new HttpProblemError({
+      code: "AUTH_ASSURANCE_REQUIRED",
+      detail: "Sensitive operation requires fresh step-up authentication within 15 minutes."
+    });
+  }
 }
 
 export async function validateProviderManagementAuthority(
   tx: Prisma.TransactionClient,
   authorityPlane: AuthorityPlane,
-  providerId: string
+  providerId: string,
+  stepUpVerified?: boolean
 ): Promise<void> {
   if (authorityPlane !== "LOCAL") {
     throw new HttpProblemError({
@@ -99,12 +108,20 @@ export async function validateProviderManagementAuthority(
     scopeType: "PROVIDER",
     providerId
   });
+
+  if (!stepUpVerified) {
+    throw new HttpProblemError({
+      code: "AUTH_ASSURANCE_REQUIRED",
+      detail: "Sensitive operation requires fresh step-up authentication within 15 minutes."
+    });
+  }
 }
 
 export async function validatePublicationTransitionAuthority(
   tx: Prisma.TransactionClient,
   authorityPlane: AuthorityPlane,
-  providerId: string
+  providerId: string,
+  stepUpVerified?: boolean
 ): Promise<void> {
   if (authorityPlane !== "LOCAL") {
     throw new HttpProblemError({
@@ -118,12 +135,20 @@ export async function validatePublicationTransitionAuthority(
     scopeType: "PROVIDER",
     providerId
   });
+
+  if (!stepUpVerified) {
+    throw new HttpProblemError({
+      code: "AUTH_ASSURANCE_REQUIRED",
+      detail: "Sensitive operation requires fresh step-up authentication within 15 minutes."
+    });
+  }
 }
 
 export async function validateVerificationEvidenceReadAuthority(
   tx: Prisma.TransactionClient,
   authorityPlane: AuthorityPlane,
-  providerId?: string
+  providerId?: string,
+  stepUpVerified?: boolean
 ): Promise<void> {
   if (authorityPlane === "LOCAL") {
     throw new HttpProblemError({
@@ -137,4 +162,11 @@ export async function validateVerificationEvidenceReadAuthority(
     scopeType: "PROVIDER",
     providerId
   });
+
+  if (!stepUpVerified) {
+    throw new HttpProblemError({
+      code: "AUTH_ASSURANCE_REQUIRED",
+      detail: "Sensitive operation requires fresh step-up authentication within 15 minutes."
+    });
+  }
 }

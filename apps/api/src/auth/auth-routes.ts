@@ -2,21 +2,21 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { HttpProblemError } from "../errors.js";
 import {
   buildClearSessionCookieHeader,
-  defaultSessionStore,
   parseSessionCookieToken,
   type SessionStore
 } from "./session.js";
-import { resolveCanonicalChannel } from "./channel.js";
+import { resolveCanonicalChannel, type ChannelHostConfig } from "./channel.js";
 
 export interface AuthRoutesOptions {
-  sessionStore?: SessionStore | undefined;
+  sessionStore: SessionStore;
+  channelHostConfig: ChannelHostConfig;
 }
 
 export function registerAuthRoutes(
   app: FastifyInstance,
-  options: AuthRoutesOptions = {}
+  options: AuthRoutesOptions
 ): void {
-  const store = options.sessionStore ?? defaultSessionStore;
+  const { sessionStore, channelHostConfig } = options;
 
   app.get("/api/v1/me", async (request: FastifyRequest) => {
     const token = parseSessionCookieToken(request.headers as Record<string, string | string[] | undefined>);
@@ -27,7 +27,7 @@ export function registerAuthRoutes(
       });
     }
 
-    const session = await store.getSession(token);
+    const session = await sessionStore.resolveSession(token);
     if (!session) {
       throw new HttpProblemError({
         code: "AUTHENTICATION_REQUIRED",
@@ -37,13 +37,14 @@ export function registerAuthRoutes(
 
     const channel = resolveCanonicalChannel(
       request.headers.host,
+      channelHostConfig,
       request.headers["x-vind-channel"] as string | string[] | undefined
     );
 
     const responseData: Record<string, unknown> = {
       actor_kind: session.actorKind,
       authority_plane: session.authorityPlane,
-      account_id: session.accountKey,
+      account_key: session.accountKey,
       channel: {
         code: channel.code,
         name: channel.name
@@ -51,17 +52,31 @@ export function registerAuthRoutes(
     };
 
     if (session.personKey) {
-      responseData.person_id = session.personKey;
+      responseData.person_key = session.personKey;
     }
-
+    if (session.membershipKey) {
+      responseData.membership_key = session.membershipKey;
+    }
+    if (session.localAssignmentKey) {
+      responseData.local_assignment_key = session.localAssignmentKey;
+    }
+    if (session.platformAssignmentKey) {
+      responseData.platform_assignment_key = session.platformAssignmentKey;
+    }
+    if (session.serviceGrantKey) {
+      responseData.service_grant_key = session.serviceGrantKey;
+    }
     if (session.organizationKey) {
-      responseData.organization_id = session.organizationKey;
+      responseData.organization_key = session.organizationKey;
     }
     if (session.workspaceKey) {
-      responseData.workspace_id = session.workspaceKey;
+      responseData.workspace_key = session.workspaceKey;
     }
     if (session.providerKey) {
-      responseData.provider_id = session.providerKey;
+      responseData.provider_key = session.providerKey;
+    }
+    if (session.regionKey) {
+      responseData.region_key = session.regionKey;
     }
 
     return {
@@ -81,13 +96,8 @@ export function registerAuthRoutes(
       });
     }
 
-    const revoked = await store.revokeSession(token);
-    if (!revoked) {
-      throw new HttpProblemError({
-        code: "AUTHENTICATION_REQUIRED",
-        detail: "Session cookie is invalid, expired, or already revoked."
-      });
-    }
+    // Call revokeSession idempotently; do not throw on unknown/expired token
+    await sessionStore.revokeSession(token, "USER_LOGOUT");
 
     reply.header("Set-Cookie", buildClearSessionCookieHeader());
 

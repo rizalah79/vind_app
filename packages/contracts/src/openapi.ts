@@ -309,16 +309,21 @@ export const openApiDocument = {
       },
       AuthenticatedContext: {
         type: "object",
-        required: ["actor_kind", "authority_plane", "account_id", "channel"],
+        required: ["actor_kind", "authority_plane", "account_key", "channel"],
         properties: {
           actor_kind: { enum: ["HUMAN", "SERVICE"] },
           authority_plane: { enum: ["RELATIONSHIP", "LOCAL", "PLATFORM", "SERVICE"] },
-          account_id: { type: "string" },
-          person_id: { type: "string" },
+          account_key: { type: "string" },
+          person_key: { type: "string" },
           channel: { $ref: "#/components/schemas/ChannelSummary" },
-          organization_id: { type: "string" },
-          workspace_id: { type: "string" },
-          provider_id: { type: "string" }
+          membership_key: { type: "string" },
+          local_assignment_key: { type: "string" },
+          platform_assignment_key: { type: "string" },
+          service_grant_key: { type: "string" },
+          organization_key: { type: "string" },
+          workspace_key: { type: "string" },
+          provider_key: { type: "string" },
+          region_key: { type: "string" }
         },
         additionalProperties: false
       },

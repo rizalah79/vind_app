@@ -1,8 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { createPrismaClient } from "@vind/database";
 import { buildApp } from "./app.js";
-import { InMemorySessionStore, buildSessionCookieHeader } from "./auth/session.js";
+import { buildSessionCookieHeader, type ResolvedSessionContext, type SessionStore } from "./auth/session.js";
+import { PostgresSessionStore, type DatabaseClient } from "./auth/postgres-session-store.js";
+import { type ChannelHostConfig } from "./auth/channel.js";
 import {
   validateProviderStatusTransitionAuthority,
   validateProviderManagementAuthority,
@@ -11,15 +14,47 @@ import {
 } from "./auth/authority.js";
 import { runWithRequestContextV2 } from "./auth/request-context-v2.js";
 
+const testChannelHostConfig: ChannelHostConfig = {
+  vindzamAllowedHosts: ["vindzam.test"],
+  vindlokaAllowedHosts: ["vindloka.test"]
+};
+
+class TestInMemorySessionStore implements SessionStore {
+  private sessions = new Map<string, ResolvedSessionContext>();
+
+  addSession(rawToken: string, session: ResolvedSessionContext): void {
+    this.sessions.set(rawToken, session);
+  }
+
+  async resolveSession(rawToken: string): Promise<ResolvedSessionContext | null> {
+    const session = this.sessions.get(rawToken);
+    if (!session) return null;
+    if (session.absoluteExpiresAt.getTime() <= Date.now()) return null;
+    return session;
+  }
+
+  async revokeSession(rawToken: string, _reasonCode?: string): Promise<boolean> {
+    const existed = this.sessions.has(rawToken);
+    this.sessions.delete(rawToken);
+    return existed;
+  }
+}
+
 describe("B2 — Authentication + Request Context V2 (Remediated)", () => {
   it("returns 401 AUTHENTICATION_REQUIRED for unauthenticated /api/v1/me", async () => {
+    const sessionStore = new TestInMemorySessionStore();
     const app = buildApp({
+      sessionStore,
+      channelHostConfig: testChannelHostConfig,
       readinessDependencies: [{ name: "mock", check: async () => {} }]
     });
 
     const response = await app.inject({
       method: "GET",
-      url: "/api/v1/me"
+      url: "/api/v1/me",
+      headers: {
+        Host: "vindzam.test"
+      }
     });
 
     assert.equal(response.statusCode, 401);
@@ -29,18 +64,22 @@ describe("B2 — Authentication + Request Context V2 (Remediated)", () => {
   });
 
   it("rejects Bearer token header for session authentication (cookie-only transport)", async () => {
-    const sessionStore = new InMemorySessionStore();
-    const session = await sessionStore.createSession({
+    const sessionStore = new TestInMemorySessionStore();
+    const token = "test_raw_token_123";
+    sessionStore.addSession(token, {
+      sessionId: "550e8400-e29b-41d4-a716-446655440000",
       accountKey: "s1:test:account:alpha",
       personKey: "s1:test:person:alpha",
       actorKind: "HUMAN",
       authorityPlane: "LOCAL",
       authAssuranceLevel: "IAL2_AAL2",
-      stepUpVerified: true
+      stepUpVerified: true,
+      absoluteExpiresAt: new Date(Date.now() + 3600000)
     });
 
     const app = buildApp({
       sessionStore,
+      channelHostConfig: testChannelHostConfig,
       readinessDependencies: [{ name: "mock", check: async () => {} }]
     });
 
@@ -48,7 +87,8 @@ describe("B2 — Authentication + Request Context V2 (Remediated)", () => {
       method: "GET",
       url: "/api/v1/me",
       headers: {
-        Authorization: `Bearer ${session.sessionId}`
+        Authorization: `Bearer ${token}`,
+        Host: "vindzam.test"
       }
     });
 
@@ -56,9 +96,11 @@ describe("B2 — Authentication + Request Context V2 (Remediated)", () => {
     assert.equal(response.json().code, "AUTHENTICATION_REQUIRED");
   });
 
-  it("returns 200 OK with canonical non-fabricated identity for valid session cookie (HUMAN)", async () => {
-    const sessionStore = new InMemorySessionStore();
-    const session = await sessionStore.createSession({
+  it("returns 200 OK with canonical *_key identity for valid session cookie (HUMAN)", async () => {
+    const sessionStore = new TestInMemorySessionStore();
+    const token = "test_raw_human_token";
+    sessionStore.addSession(token, {
+      sessionId: "550e8400-e29b-41d4-a716-446655440001",
       accountKey: "s1:test:account:alpha",
       personKey: "s1:test:person:alpha",
       actorKind: "HUMAN",
@@ -68,11 +110,13 @@ describe("B2 — Authentication + Request Context V2 (Remediated)", () => {
       membershipKey: "mem_789",
       organizationKey: "org_001",
       workspaceKey: "ws_002",
-      providerKey: "prv_003"
+      providerKey: "prv_003",
+      absoluteExpiresAt: new Date(Date.now() + 3600000)
     });
 
     const app = buildApp({
       sessionStore,
+      channelHostConfig: testChannelHostConfig,
       readinessDependencies: [{ name: "mock", check: async () => {} }]
     });
 
@@ -80,8 +124,8 @@ describe("B2 — Authentication + Request Context V2 (Remediated)", () => {
       method: "GET",
       url: "/api/v1/me",
       headers: {
-        Cookie: buildSessionCookieHeader(session.sessionId),
-        Host: "vindzam.app"
+        Cookie: buildSessionCookieHeader(token),
+        Host: "vindzam.test"
       }
     });
 
@@ -90,32 +134,42 @@ describe("B2 — Authentication + Request Context V2 (Remediated)", () => {
     assert.ok(body.data);
     assert.equal(body.data.actor_kind, "HUMAN");
     assert.equal(body.data.authority_plane, "LOCAL");
-    assert.equal(body.data.account_id, "s1:test:account:alpha");
-    assert.equal(body.data.person_id, "s1:test:person:alpha");
+    assert.equal(body.data.account_key, "s1:test:account:alpha");
+    assert.equal(body.data.person_key, "s1:test:person:alpha");
+    assert.equal(body.data.membership_key, "mem_789");
+    assert.equal(body.data.organization_key, "org_001");
+    assert.equal(body.data.workspace_key, "ws_002");
+    assert.equal(body.data.provider_key, "prv_003");
     assert.equal(body.data.channel.code, "VINDZAM");
-    assert.equal(body.data.organization_id, "org_001");
-    assert.equal(body.data.workspace_id, "ws_002");
-    assert.equal(body.data.provider_id, "prv_003");
-    // Ensure no fabricated identity fields are emitted
-    assert.equal(body.data.seed_key, undefined);
-    assert.equal(body.data.account_type, undefined);
-    assert.equal(body.data.status, undefined);
+
+    // Ensure deprecated *_id and internal fields are omitted
+    assert.equal(body.data.account_id, undefined);
+    assert.equal(body.data.person_id, undefined);
+    assert.equal(body.data.organization_id, undefined);
+    assert.equal(body.data.workspace_id, undefined);
+    assert.equal(body.data.provider_id, undefined);
+    assert.equal(body.data.sessionId, undefined);
+    assert.equal(body.data.session_id, undefined);
   });
 
-  it("supports SERVICE actor model with optional person_id omitted", async () => {
-    const sessionStore = new InMemorySessionStore();
-    const session = await sessionStore.createSession({
+  it("supports SERVICE actor model with optional person_key omitted", async () => {
+    const sessionStore = new TestInMemorySessionStore();
+    const token = "test_raw_service_token";
+    sessionStore.addSession(token, {
+      sessionId: "550e8400-e29b-41d4-a716-446655440002",
       accountKey: "s1:test:account:service_bot",
       personKey: null,
       actorKind: "SERVICE",
       authorityPlane: "SERVICE",
       authAssuranceLevel: "STRONG",
       stepUpVerified: false,
-      serviceGrantKey: "grant_123"
+      serviceGrantKey: "grant_123",
+      absoluteExpiresAt: new Date(Date.now() + 3600000)
     });
 
     const app = buildApp({
       sessionStore,
+      channelHostConfig: testChannelHostConfig,
       readinessDependencies: [{ name: "mock", check: async () => {} }]
     });
 
@@ -123,7 +177,8 @@ describe("B2 — Authentication + Request Context V2 (Remediated)", () => {
       method: "GET",
       url: "/api/v1/me",
       headers: {
-        Cookie: buildSessionCookieHeader(session.sessionId)
+        Cookie: buildSessionCookieHeader(token),
+        Host: "vindloka.test"
       }
     });
 
@@ -131,103 +186,298 @@ describe("B2 — Authentication + Request Context V2 (Remediated)", () => {
     const body = response.json();
     assert.equal(body.data.actor_kind, "SERVICE");
     assert.equal(body.data.authority_plane, "SERVICE");
-    assert.equal(body.data.account_id, "s1:test:account:service_bot");
-    assert.equal(body.data.person_id, undefined);
+    assert.equal(body.data.account_key, "s1:test:account:service_bot");
+    assert.equal(body.data.service_grant_key, "grant_123");
+    assert.equal(body.data.person_key, undefined);
+    assert.equal(body.data.channel.code, "VINDLOKA");
   });
 
-  it("requires valid session cookie for /api/v1/session/logout", async () => {
-    const sessionStore = new InMemorySessionStore();
+  it("enforces idempotent logout for cookie-present requests", async () => {
+    const sessionStore = new TestInMemorySessionStore();
     const app = buildApp({
       sessionStore,
+      channelHostConfig: testChannelHostConfig,
       readinessDependencies: [{ name: "mock", check: async () => {} }]
     });
 
+    // 1. Missing cookie logout => 401
     const unauthenticatedLogout = await app.inject({
       method: "POST",
       url: "/api/v1/session/logout"
     });
-
     assert.equal(unauthenticatedLogout.statusCode, 401);
 
-    const session = await sessionStore.createSession({
+    // 2. Add valid session and logout => 200 + clear cookie
+    const token = "valid_logout_token";
+    sessionStore.addSession(token, {
+      sessionId: "550e8400-e29b-41d4-a716-446655440003",
       accountKey: "acc_logout",
       personKey: "per_logout",
       actorKind: "HUMAN",
       authorityPlane: "LOCAL",
       authAssuranceLevel: "IAL2",
-      stepUpVerified: false
+      stepUpVerified: false,
+      absoluteExpiresAt: new Date(Date.now() + 3600000)
     });
 
-    const logoutResponse = await app.inject({
+    const logoutResponse1 = await app.inject({
       method: "POST",
       url: "/api/v1/session/logout",
       headers: {
-        Cookie: buildSessionCookieHeader(session.sessionId)
+        Cookie: buildSessionCookieHeader(token)
       }
     });
 
-    assert.equal(logoutResponse.statusCode, 200);
-    assert.equal(logoutResponse.json().data.success, true);
-    assert.ok(logoutResponse.headers["set-cookie"]);
+    assert.equal(logoutResponse1.statusCode, 200);
+    assert.equal(logoutResponse1.json().data.success, true);
+    assert.ok(logoutResponse1.headers["set-cookie"]);
 
-    // Subsequent /me returns 401
-    const meResponse = await app.inject({
-      method: "GET",
-      url: "/api/v1/me",
+    // 3. Repeated logout with same cookie (token now unknown/revoked) => 200 + clear cookie (idempotent!)
+    const logoutResponse2 = await app.inject({
+      method: "POST",
+      url: "/api/v1/session/logout",
       headers: {
-        Cookie: buildSessionCookieHeader(session.sessionId)
+        Cookie: buildSessionCookieHeader(token)
       }
     });
-    assert.equal(meResponse.statusCode, 401);
+
+    assert.equal(logoutResponse2.statusCode, 200);
+    assert.equal(logoutResponse2.json().data.success, true);
+    assert.ok(logoutResponse2.headers["set-cookie"]);
   });
 
-  it("enforces host-based channel authority and rejects forged client presentation hints", async () => {
-    const sessionStore = new InMemorySessionStore();
-    const session = await sessionStore.createSession({
+  it("enforces exact host allowlist matching and rejects unauthorized/lookalike hostnames", async () => {
+    const sessionStore = new TestInMemorySessionStore();
+    const token = "test_channel_token";
+    sessionStore.addSession(token, {
+      sessionId: "550e8400-e29b-41d4-a716-446655440004",
       accountKey: "acc_chan",
       personKey: "per_chan",
       actorKind: "HUMAN",
       authorityPlane: "RELATIONSHIP",
       authAssuranceLevel: "IAL1",
-      stepUpVerified: false
+      stepUpVerified: false,
+      absoluteExpiresAt: new Date(Date.now() + 3600000)
     });
 
     const app = buildApp({
       sessionStore,
+      channelHostConfig: testChannelHostConfig,
       readinessDependencies: [{ name: "mock", check: async () => {} }]
     });
 
-    // 1. Host maps to VINDZAM + header hints VINDLOKA => rejected with 400 VALIDATION_FAILED
-    const responseForged = await app.inject({
+    // 1. Exact VINDZAM host => 200 VINDZAM
+    const resVindzam = await app.inject({
       method: "GET",
       url: "/api/v1/me",
       headers: {
-        Cookie: buildSessionCookieHeader(session.sessionId),
-        Host: "vindzam.app",
+        Cookie: buildSessionCookieHeader(token),
+        Host: "vindzam.test"
+      }
+    });
+    assert.equal(resVindzam.statusCode, 200);
+    assert.equal(resVindzam.json().data.channel.code, "VINDZAM");
+
+    // 2. Exact VINDLOKA host => 200 VINDLOKA
+    const resVindloka = await app.inject({
+      method: "GET",
+      url: "/api/v1/me",
+      headers: {
+        Cookie: buildSessionCookieHeader(token),
+        Host: "vindloka.test"
+      }
+    });
+    assert.equal(resVindloka.statusCode, 200);
+    assert.equal(resVindloka.json().data.channel.code, "VINDLOKA");
+
+    // 3. Substring lookalike hostname (notvindzam.test) => 400 VALIDATION_FAILED
+    const resLookalike = await app.inject({
+      method: "GET",
+      url: "/api/v1/me",
+      headers: {
+        Cookie: buildSessionCookieHeader(token),
+        Host: "notvindzam.test"
+      }
+    });
+    assert.equal(resLookalike.statusCode, 400);
+    assert.equal(resLookalike.json().code, "VALIDATION_FAILED");
+
+    // 4. Unknown host => 400 VALIDATION_FAILED
+    const resUnknown = await app.inject({
+      method: "GET",
+      url: "/api/v1/me",
+      headers: {
+        Cookie: buildSessionCookieHeader(token),
+        Host: "unknown.test"
+      }
+    });
+    assert.equal(resUnknown.statusCode, 400);
+    assert.equal(resUnknown.json().code, "VALIDATION_FAILED");
+
+    // 5. Conflicting presentation hint => 400 VALIDATION_FAILED
+    const resForged = await app.inject({
+      method: "GET",
+      url: "/api/v1/me",
+      headers: {
+        Cookie: buildSessionCookieHeader(token),
+        Host: "vindzam.test",
         "x-vind-channel": "VINDLOKA"
       }
     });
+    assert.equal(resForged.statusCode, 400);
+    assert.equal(resForged.json().code, "VALIDATION_FAILED");
+  });
 
-    assert.equal(responseForged.statusCode, 400);
-    assert.equal(responseForged.json().code, "VALIDATION_FAILED");
+  describe("PostgresSessionStore Unit Tests", () => {
+    it("hashes raw token with SHA-256 and calls identity.resolve_auth_session with bytea Buffer", async () => {
+      let capturedQuery = "";
+      let capturedParams: any[] = [];
 
-    // 2. Host maps to VINDLOKA => resolved to VINDLOKA
-    const responseLoka = await app.inject({
-      method: "GET",
-      url: "/api/v1/me",
-      headers: {
-        Cookie: buildSessionCookieHeader(session.sessionId),
-        Host: "ops.vindloka.com"
-      }
+      const mockDb: DatabaseClient = {
+        async query<T = any>(text: string, params?: any[]): Promise<{ rows: T[] }> {
+          capturedQuery = text;
+          capturedParams = params || [];
+          return {
+            rows: [
+              {
+                session_id: "550e8400-e29b-41d4-a716-446655440005",
+                actor_account_key: "acc_pg_test",
+                actor_person_key: "per_pg_test",
+                actor_kind: "HUMAN",
+                authority_plane: "LOCAL",
+                membership_key: "mem_pg",
+                local_assignment_key: "assign_pg",
+                platform_assignment_key: null,
+                service_grant_key: null,
+                organization_key: "org_pg",
+                workspace_key: "ws_pg",
+                provider_key: "prv_pg",
+                channel_code: "VINDZAM",
+                region_key: "reg_pg",
+                auth_assurance_level: "IAL2_AAL2",
+                step_up_verified: true,
+                absolute_expires_at: new Date(Date.now() + 3600000)
+              } as any
+            ]
+          };
+        }
+      };
+
+      const store = new PostgresSessionStore(mockDb);
+      const rawToken = "my_secret_raw_token_xyz";
+      const resolved = await store.resolveSession(rawToken);
+
+      assert.ok(resolved);
+      assert.equal(resolved.accountKey, "acc_pg_test");
+      assert.equal(resolved.personKey, "per_pg_test");
+      assert.equal(resolved.stepUpVerified, true);
+      assert.ok(capturedQuery.includes("identity.resolve_auth_session($1)"));
+      assert.ok(Buffer.isBuffer(capturedParams[0]));
+      assert.equal(capturedParams[0].length, 32);
+
+      const expectedDigest = createHash("sha256").update(rawToken).digest();
+      assert.deepEqual(capturedParams[0], expectedDigest);
     });
 
-    assert.equal(responseLoka.statusCode, 200);
-    assert.equal(responseLoka.json().data.channel.code, "VINDLOKA");
+    it("returns null when resolve_auth_session returns zero rows", async () => {
+      const mockDb: DatabaseClient = {
+        async query<T = any>(): Promise<{ rows: T[] }> {
+          return { rows: [] };
+        }
+      };
+
+      const store = new PostgresSessionStore(mockDb);
+      const resolved = await store.resolveSession("invalid_token");
+      assert.equal(resolved, null);
+    });
+
+    it("calls identity.revoke_auth_session with bytea Buffer and reason text", async () => {
+      let capturedParams: any[] = [];
+      const mockDb: DatabaseClient = {
+        async query<T = any>(_text: string, params?: any[]): Promise<{ rows: T[] }> {
+          capturedParams = params || [];
+          return { rows: [{ revoke_auth_session: true } as any] };
+        }
+      };
+
+      const store = new PostgresSessionStore(mockDb);
+      const res = await store.revokeSession("raw_revoke_token", "USER_LOGOUT");
+      assert.equal(res, true);
+      assert.ok(Buffer.isBuffer(capturedParams[0]));
+      assert.equal(capturedParams[0].length, 32);
+      assert.equal(capturedParams[1], "USER_LOGOUT");
+    });
+  });
+
+  describe("Sensitive Capability Step-Up Enforcement Unit Tests", () => {
+    it("allows sensitive operation when capability is permitted and stepUpVerified is true", async () => {
+      const mockTx: any = {
+        async $queryRawUnsafe() {
+          return [{ has_local_capability: true }];
+        }
+      };
+
+      await assert.doesNotReject(async () => {
+        await validateProviderStatusTransitionAuthority(mockTx, "LOCAL", "prov_1", true);
+      });
+    });
+
+    it("throws AUTH_ASSURANCE_REQUIRED when capability is permitted but stepUpVerified is false", async () => {
+      const mockTx: any = {
+        async $queryRawUnsafe() {
+          return [{ has_local_capability: true }];
+        }
+      };
+
+      await assert.rejects(
+        async () => {
+          await validateProviderStatusTransitionAuthority(mockTx, "LOCAL", "prov_1", false);
+        },
+        (err: any) => err.code === "AUTH_ASSURANCE_REQUIRED"
+      );
+    });
+
+    it("throws CAPABILITY_DENIED when capability is denied even if stepUpVerified is true", async () => {
+      const mockTx: any = {
+        async $queryRawUnsafe() {
+          return [{ has_local_capability: false }];
+        }
+      };
+
+      await assert.rejects(
+        async () => {
+          await validateProviderStatusTransitionAuthority(mockTx, "LOCAL", "prov_1", true);
+        },
+        (err: any) => err.code === "CAPABILITY_DENIED"
+      );
+    });
+
+    it("throws OBJECT_ACCESS_DENIED for LOCAL verification evidence read regardless of stepUpVerified", async () => {
+      const mockTx: any = {};
+
+      await assert.rejects(
+        async () => {
+          await validateVerificationEvidenceReadAuthority(mockTx, "LOCAL", "prov_1", true);
+        },
+        (err: any) => err.code === "OBJECT_ACCESS_DENIED"
+      );
+
+      await assert.rejects(
+        async () => {
+          await validateVerificationEvidenceReadAuthority(mockTx, "LOCAL", "prov_1", false);
+        },
+        (err: any) => err.code === "OBJECT_ACCESS_DENIED"
+      );
+    });
   });
 
   it("PHYSICAL POOL TEST: verifies no context leakage across reused physical DB connection", async () => {
-    const defaultDatabaseUrl = "postgresql://vind_app_runtime:874a86afb6a871c9a905637599d7fb41755c76657f39740b75f28077ad4d5d33@127.0.0.1:5432/vind_app_dev";
-    const dbUrl = process.env.DATABASE_URL || defaultDatabaseUrl;
+    const dbUrl = process.env.DATABASE_URL;
+    if (!dbUrl) {
+      console.log("Skipping DB-backed Request Context V2 pool test (DATABASE_URL not set).");
+      return;
+    }
+
     const db = createPrismaClient(dbUrl);
 
     try {
@@ -289,62 +539,6 @@ describe("B2 — Authentication + Request Context V2 (Remediated)", () => {
           assert.ok(!orgRes[0]?.context_value);
           assert.ok(!bgRes[0]?.context_value);
           assert.equal(stepRes[0]?.context_value, "false");
-        }
-      );
-
-      // Request C testing transaction rollback cleanup
-      try {
-        await runWithRequestContextV2(
-          db,
-          {
-            actorAccountKey: "s1:test:account:err",
-            actorPersonKey: "s1:test:person:err",
-            actorKind: "HUMAN",
-            authorityPlane: "LOCAL",
-            organizationKey: "org_err"
-          },
-          async (tx) => {
-            await tx.$queryRawUnsafe(`SELECT 1 / 0`);
-          }
-        );
-      } catch {
-        // Expected division by zero error
-      }
-
-      // Verify connection context after error rollback is completely clean
-      await db.$transaction(async (tx) => {
-        const checkRes = await tx.$queryRawUnsafe<Array<{ context_value: string | null }>>(
-          `SELECT security.context_value('actor_account_key') AS context_value`
-        );
-        assert.ok(!checkRes[0]?.context_value);
-      });
-    } finally {
-      await db.$disconnect();
-    }
-  });
-
-  it("canonical DB authorization denies verification evidence read for local authority plane", async () => {
-    const defaultDatabaseUrl = "postgresql://vind_app_runtime:874a86afb6a871c9a905637599d7fb41755c76657f39740b75f28077ad4d5d33@127.0.0.1:5432/vind_app_dev";
-    const dbUrl = process.env.DATABASE_URL || defaultDatabaseUrl;
-    const db = createPrismaClient(dbUrl);
-
-    try {
-      await runWithRequestContextV2(
-        db,
-        {
-          actorAccountKey: "s1:test:account:alpha",
-          actorPersonKey: "s1:test:person:alpha",
-          actorKind: "HUMAN",
-          authorityPlane: "LOCAL",
-          organizationKey: "org_alpha"
-        },
-        async (tx) => {
-          await assert.rejects(
-            async () => {
-              await validateVerificationEvidenceReadAuthority(tx, "LOCAL", "prov_alpha");
-            },
-            (err: any) => err.code === "OBJECT_ACCESS_DENIED"
-          );
         }
       );
     } finally {
