@@ -144,6 +144,143 @@ export const openApiDocument = {
           }
         }
       }
+    },
+    "/api/v1/public/providers/{providerId}": {
+      get: {
+        operationId: "getPublicProviderProfile",
+        tags: ["Public Catalog"],
+        summary: "Get active public provider profile",
+        parameters: [
+          {
+            name: "providerId",
+            in: "path",
+            required: true,
+            schema: { type: "string" }
+          }
+        ],
+        responses: {
+          "200": {
+            description: "Active public provider profile.",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/PublicProviderProfileEnvelope" } } }
+          },
+          "404": { $ref: "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/public/listings": {
+      get: {
+        operationId: "getPublicListings",
+        tags: ["Public Catalog"],
+        summary: "List published channel listings with opaque cursor pagination",
+        parameters: [
+          { name: "cursor", in: "query", schema: { type: "string" } },
+          { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 50, default: 10 } },
+          { name: "provider_id", in: "query", schema: { type: "string" } }
+        ],
+        responses: {
+          "200": {
+            description: "Paginated list of published channel listings.",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/PublicListingsEnvelope" } } }
+          },
+          "400": { $ref: "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/public/listings/{publicationId}": {
+      get: {
+        operationId: "getPublicListingDetail",
+        tags: ["Public Catalog"],
+        summary: "Get published channel listing detail",
+        parameters: [
+          { name: "publicationId", in: "path", required: true, schema: { type: "string" } }
+        ],
+        responses: {
+          "200": {
+            description: "Published channel listing detail.",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/PublicListingDetailEnvelope" } } }
+          },
+          "404": { $ref: "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/providers/{providerId}": {
+      get: {
+        operationId: "getProviderProfile",
+        tags: ["Provider Management"],
+        summary: "Get provider profile detail for authorized tenant",
+        security: [{ cookieAuth: [] }],
+        parameters: [
+          { name: "providerId", in: "path", required: true, schema: { type: "string" } }
+        ],
+        responses: {
+          "200": {
+            description: "Provider profile detail.",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/ProviderDetailEnvelope" } } }
+          },
+          "401": { $ref: "#/components/responses/Problem" },
+          "404": { $ref: "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/providers/{providerId}/offerings": {
+      get: {
+        operationId: "getProviderOfferings",
+        tags: ["Catalog Management"],
+        summary: "List provider offerings with pagination",
+        security: [{ cookieAuth: [] }],
+        parameters: [
+          { name: "providerId", in: "path", required: true, schema: { type: "string" } },
+          { name: "cursor", in: "query", schema: { type: "string" } },
+          { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 50, default: 10 } },
+          { name: "status", in: "query", schema: { type: "string" } }
+        ],
+        responses: {
+          "200": {
+            description: "Paginated list of provider offerings.",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/OfferingSummariesEnvelope" } } }
+          },
+          "401": { $ref: "#/components/responses/Problem" },
+          "404": { $ref: "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/catalog/offerings/{offeringId}": {
+      get: {
+        operationId: "getOfferingDetail",
+        tags: ["Catalog Management"],
+        summary: "Get catalog offering detail including linked resources",
+        security: [{ cookieAuth: [] }],
+        parameters: [
+          { name: "offeringId", in: "path", required: true, schema: { type: "string" } }
+        ],
+        responses: {
+          "200": {
+            description: "Catalog offering detail.",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/OfferingDetailEnvelope" } } }
+          },
+          "401": { $ref: "#/components/responses/Problem" },
+          "404": { $ref: "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/catalog/packages/{packageId}": {
+      get: {
+        operationId: "getPackageDetail",
+        tags: ["Catalog Management"],
+        summary: "Get catalog package detail including items",
+        security: [{ cookieAuth: [] }],
+        parameters: [
+          { name: "packageId", in: "path", required: true, schema: { type: "string" } }
+        ],
+        responses: {
+          "200": {
+            description: "Catalog package detail.",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/PackageDetailEnvelope" } } }
+          },
+          "401": { $ref: "#/components/responses/Problem" },
+          "404": { $ref: "#/components/responses/Problem" }
+        }
+      }
     }
   },
   components: {
@@ -349,6 +486,266 @@ export const openApiDocument = {
         required: ["data", "meta"],
         properties: {
           data: { $ref: "#/components/schemas/LogoutResult" },
+          meta: { $ref: "#/components/schemas/ResponseMeta" }
+        },
+        additionalProperties: false
+      },
+      PaginationMeta: {
+        type: "object",
+        required: ["next_cursor", "has_more"],
+        properties: {
+          next_cursor: { type: ["string", "null"] },
+          has_more: { type: "boolean" }
+        },
+        additionalProperties: false
+      },
+      PublicProviderProfile: {
+        type: "object",
+        required: ["id", "display_name", "provider_type", "status", "created_at"],
+        properties: {
+          id: { type: "string" },
+          display_name: { type: "string" },
+          provider_type: { type: "string" },
+          status: { type: "string" },
+          created_at: { type: "string" }
+        },
+        additionalProperties: false
+      },
+      PublicProviderProfileEnvelope: {
+        type: "object",
+        required: ["data", "meta"],
+        properties: {
+          data: { $ref: "#/components/schemas/PublicProviderProfile" },
+          meta: { $ref: "#/components/schemas/ResponseMeta" }
+        },
+        additionalProperties: false
+      },
+      PublicListingSummary: {
+        type: "object",
+        required: ["id", "provider_id", "offering_id", "package_id", "channel_code", "publication_status", "title", "description", "effective_from", "created_at"],
+        properties: {
+          id: { type: "string" },
+          provider_id: { type: "string" },
+          offering_id: { type: ["string", "null"] },
+          package_id: { type: ["string", "null"] },
+          channel_code: { type: "string" },
+          publication_status: { type: "string" },
+          title: { type: "string" },
+          description: { type: ["string", "null"] },
+          effective_from: { type: ["string", "null"] },
+          created_at: { type: "string" }
+        },
+        additionalProperties: false
+      },
+      PublicListingsEnvelope: {
+        type: "object",
+        required: ["data", "meta"],
+        properties: {
+          data: {
+            type: "array",
+            items: { $ref: "#/components/schemas/PublicListingSummary" }
+          },
+          meta: {
+            type: "object",
+            required: ["request_id", "pagination"],
+            properties: {
+              request_id: { $ref: "#/components/schemas/RequestId" },
+              pagination: { $ref: "#/components/schemas/PaginationMeta" }
+            },
+            additionalProperties: false
+          }
+        },
+        additionalProperties: false
+      },
+      PublicListingDetail: {
+        type: "object",
+        required: ["id", "provider_id", "provider", "offering_id", "offering", "package_id", "package", "channel_code", "publication_status", "effective_from", "created_at"],
+        properties: {
+          id: { type: "string" },
+          provider_id: { type: "string" },
+          provider: {
+            type: "object",
+            required: ["id", "display_name", "provider_type"],
+            properties: {
+              id: { type: "string" },
+              display_name: { type: "string" },
+              provider_type: { type: "string" }
+            },
+            additionalProperties: false
+          },
+          offering_id: { type: ["string", "null"] },
+          offering: {
+            type: ["object", "null"],
+            required: ["id", "offering_code", "title", "description"],
+            properties: {
+              id: { type: "string" },
+              offering_code: { type: "string" },
+              title: { type: "string" },
+              description: { type: ["string", "null"] }
+            },
+            additionalProperties: false
+          },
+          package_id: { type: ["string", "null"] },
+          package: {
+            type: ["object", "null"],
+            required: ["id", "package_code", "title", "anchor_offering_id"],
+            properties: {
+              id: { type: "string" },
+              package_code: { type: "string" },
+              title: { type: "string" },
+              anchor_offering_id: { type: "string" }
+            },
+            additionalProperties: false
+          },
+          channel_code: { type: "string" },
+          publication_status: { type: "string" },
+          effective_from: { type: ["string", "null"] },
+          created_at: { type: "string" }
+        },
+        additionalProperties: false
+      },
+      PublicListingDetailEnvelope: {
+        type: "object",
+        required: ["data", "meta"],
+        properties: {
+          data: { $ref: "#/components/schemas/PublicListingDetail" },
+          meta: { $ref: "#/components/schemas/ResponseMeta" }
+        },
+        additionalProperties: false
+      },
+      ProviderDetail: {
+        type: "object",
+        required: ["id", "display_name", "legal_name", "provider_type", "status", "owning_organization_id", "owning_person_id", "created_at", "updated_at"],
+        properties: {
+          id: { type: "string" },
+          display_name: { type: "string" },
+          legal_name: { type: "string" },
+          provider_type: { type: "string" },
+          status: { type: "string" },
+          owning_organization_id: { type: ["string", "null"] },
+          owning_person_id: { type: ["string", "null"] },
+          created_at: { type: "string" },
+          updated_at: { type: "string" }
+        },
+        additionalProperties: false
+      },
+      ProviderDetailEnvelope: {
+        type: "object",
+        required: ["data", "meta"],
+        properties: {
+          data: { $ref: "#/components/schemas/ProviderDetail" },
+          meta: { $ref: "#/components/schemas/ResponseMeta" }
+        },
+        additionalProperties: false
+      },
+      OfferingSummary: {
+        type: "object",
+        required: ["id", "provider_profile_id", "offering_code", "title", "description", "status", "created_at"],
+        properties: {
+          id: { type: "string" },
+          provider_profile_id: { type: "string" },
+          offering_code: { type: "string" },
+          title: { type: "string" },
+          description: { type: ["string", "null"] },
+          status: { type: "string" },
+          created_at: { type: "string" }
+        },
+        additionalProperties: false
+      },
+      OfferingSummariesEnvelope: {
+        type: "object",
+        required: ["data", "meta"],
+        properties: {
+          data: {
+            type: "array",
+            items: { $ref: "#/components/schemas/OfferingSummary" }
+          },
+          meta: {
+            type: "object",
+            required: ["request_id", "pagination"],
+            properties: {
+              request_id: { $ref: "#/components/schemas/RequestId" },
+              pagination: { $ref: "#/components/schemas/PaginationMeta" }
+            },
+            additionalProperties: false
+          }
+        },
+        additionalProperties: false
+      },
+      OfferingDetail: {
+        type: "object",
+        required: ["id", "provider_profile_id", "offering_code", "title", "description", "status", "resources", "created_at", "updated_at"],
+        properties: {
+          id: { type: "string" },
+          provider_profile_id: { type: "string" },
+          offering_code: { type: "string" },
+          title: { type: "string" },
+          description: { type: ["string", "null"] },
+          status: { type: "string" },
+          resources: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["resource_id", "resource_code", "title", "resource_type", "quantity"],
+              properties: {
+                resource_id: { type: "string" },
+                resource_code: { type: "string" },
+                title: { type: "string" },
+                resource_type: { type: "string" },
+                quantity: { type: "integer" }
+              },
+              additionalProperties: false
+            }
+          },
+          created_at: { type: "string" },
+          updated_at: { type: "string" }
+        },
+        additionalProperties: false
+      },
+      OfferingDetailEnvelope: {
+        type: "object",
+        required: ["data", "meta"],
+        properties: {
+          data: { $ref: "#/components/schemas/OfferingDetail" },
+          meta: { $ref: "#/components/schemas/ResponseMeta" }
+        },
+        additionalProperties: false
+      },
+      PackageDetail: {
+        type: "object",
+        required: ["id", "provider_profile_id", "package_code", "title", "anchor_offering_id", "status", "items", "created_at", "updated_at"],
+        properties: {
+          id: { type: "string" },
+          provider_profile_id: { type: "string" },
+          package_code: { type: "string" },
+          title: { type: "string" },
+          anchor_offering_id: { type: "string" },
+          status: { type: "string" },
+          items: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["offering_id", "offering_code", "title", "quantity", "is_optional"],
+              properties: {
+                offering_id: { type: "string" },
+                offering_code: { type: "string" },
+                title: { type: "string" },
+                quantity: { type: "integer" },
+                is_optional: { type: "boolean" }
+              },
+              additionalProperties: false
+            }
+          },
+          created_at: { type: "string" },
+          updated_at: { type: "string" }
+        },
+        additionalProperties: false
+      },
+      PackageDetailEnvelope: {
+        type: "object",
+        required: ["data", "meta"],
+        properties: {
+          data: { $ref: "#/components/schemas/PackageDetail" },
           meta: { $ref: "#/components/schemas/ResponseMeta" }
         },
         additionalProperties: false

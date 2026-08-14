@@ -38,6 +38,7 @@ export async function buildProductionApp(options: BuildProductionAppOptions = {}
   const app = buildApp({
     sessionStore,
     channelHostConfig,
+    dbClient,
     ...(options.readinessDependencies ? { readinessDependencies: options.readinessDependencies } : {})
   });
 
