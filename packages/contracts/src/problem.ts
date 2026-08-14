@@ -12,9 +12,19 @@ export const problemCatalog = {
     title: "Authentication Required",
     retryable: false
   },
+  AUTH_ASSURANCE_REQUIRED: {
+    status: 401,
+    title: "Auth Assurance Required",
+    retryable: false
+  },
   CAPABILITY_DENIED: {
     status: 403,
     title: "Capability Denied",
+    retryable: false
+  },
+  OBJECT_ACCESS_DENIED: {
+    status: 403,
+    title: "Object Access Denied",
     retryable: false
   },
   RESOURCE_NOT_FOUND: {

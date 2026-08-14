@@ -21,6 +21,9 @@ import {
   generateRequestId,
   resolveRequestIdHeader
 } from "./request-id.js";
+import { registerAuthRoutes } from "./auth/auth-routes.js";
+import { type SessionStore } from "./auth/session.js";
+import { type ChannelHostConfig } from "./auth/channel.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -30,6 +33,8 @@ declare module "fastify" {
 
 export interface BuildAppOptions {
   readinessDependencies?: readonly ReadinessDependency[];
+  sessionStore?: SessionStore | undefined;
+  channelHostConfig?: ChannelHostConfig | undefined;
 }
 
 function getProblemInstance(request: FastifyRequest): string {
@@ -128,6 +133,15 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   });
 
   app.get("/api/v1/openapi.json", async () => openApiDocument);
+
+  if (options.sessionStore && options.channelHostConfig) {
+    registerAuthRoutes(app, {
+      sessionStore: options.sessionStore,
+      channelHostConfig: options.channelHostConfig
+    });
+  } else if (options.sessionStore || options.channelHostConfig) {
+    throw new Error("Both sessionStore and channelHostConfig must be supplied together to enable auth routes.");
+  }
 
   return app;
 }
