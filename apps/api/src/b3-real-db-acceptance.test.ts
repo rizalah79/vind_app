@@ -25,8 +25,20 @@ const mainDbName = process.env.POSTGRES_DB || "vind_app_dev";
 const acceptDbName = `vind_app_accept_b3_${Date.now()}`;
 
 const adminUrl = `postgresql://${bootstrapUser}:${bootstrapPassword}@127.0.0.1:${dbPort}/${mainDbName}`;
-const ownerUrl = `postgresql://vind_migrator:d9c019e387229ff9ea243f9d5f87c6e3dc5a5d82406e8701093107e3a49ca805@127.0.0.1:${dbPort}/${acceptDbName}?options=-c%20role%3Dvind_db_owner`;
-const runtimeUrl = `postgresql://vind_app_runtime:044e408d8dd3f869ce2ef5cd77aefc7d6d9c8570617400e1a94bcb3a2f7b76cd@127.0.0.1:${dbPort}/${acceptDbName}`;
+const migrationUrlRaw = process.env.DATABASE_MIGRATION_URL || `postgresql://${bootstrapUser}:${bootstrapPassword}@127.0.0.1:${dbPort}/${mainDbName}`;
+const runtimeUrlRaw = process.env.DATABASE_URL || `postgresql://${bootstrapUser}:${bootstrapPassword}@127.0.0.1:${dbPort}/${mainDbName}`;
+
+function buildAcceptanceDbUrl(baseConnectionString: string, targetDbName: string, extraOptions?: string): string {
+  const parsed = new URL(baseConnectionString);
+  parsed.pathname = `/${targetDbName}`;
+  if (extraOptions) {
+    parsed.search = extraOptions;
+  }
+  return parsed.toString();
+}
+
+const ownerUrl = buildAcceptanceDbUrl(migrationUrlRaw, acceptDbName, "?options=-c%20role%3Dvind_db_owner");
+const runtimeUrl = buildAcceptanceDbUrl(runtimeUrlRaw, acceptDbName);
 
 class TestAcceptanceSessionStore implements SessionStore {
   private sessions = new Map<string, ResolvedSessionContext>();
@@ -302,7 +314,7 @@ describe("F. Real PostgreSQL Acceptance Test Suite — vind_app_runtime (B3)", (
       organizationKey: "org:alpha",
       workspaceKey: null,
       providerKey: "prov:alpha1",
-      channelCode: "VINDZAM",
+      authorityChannelCode: "VINDZAM",
       regionKey: null,
       authAssuranceLevel: "AL1",
       stepUpVerified: false,
@@ -322,7 +334,7 @@ describe("F. Real PostgreSQL Acceptance Test Suite — vind_app_runtime (B3)", (
       organizationKey: "org:alpha",
       workspaceKey: "ws:alpha1",
       providerKey: "prov:alpha1",
-      channelCode: "VINDZAM",
+      authorityChannelCode: "VINDZAM",
       regionKey: null,
       authAssuranceLevel: "AL1",
       stepUpVerified: false,
@@ -342,7 +354,7 @@ describe("F. Real PostgreSQL Acceptance Test Suite — vind_app_runtime (B3)", (
       organizationKey: "org:alpha",
       workspaceKey: "ws:alpha2",
       providerKey: null,
-      channelCode: "VINDZAM",
+      authorityChannelCode: "VINDZAM",
       regionKey: null,
       authAssuranceLevel: "AL1",
       stepUpVerified: false,
@@ -362,7 +374,7 @@ describe("F. Real PostgreSQL Acceptance Test Suite — vind_app_runtime (B3)", (
       organizationKey: "org:beta",
       workspaceKey: "ws:beta1",
       providerKey: "prov:beta1",
-      channelCode: "VINDZAM",
+      authorityChannelCode: "VINDZAM",
       regionKey: null,
       authAssuranceLevel: "AL1",
       stepUpVerified: false,
@@ -382,7 +394,7 @@ describe("F. Real PostgreSQL Acceptance Test Suite — vind_app_runtime (B3)", (
       organizationKey: null,
       workspaceKey: null,
       providerKey: "prov:alpha1",
-      channelCode: "VINDZAM",
+      authorityChannelCode: "VINDZAM",
       regionKey: null,
       authAssuranceLevel: "AL1",
       stepUpVerified: false,
@@ -402,7 +414,7 @@ describe("F. Real PostgreSQL Acceptance Test Suite — vind_app_runtime (B3)", (
       organizationKey: null,
       workspaceKey: null,
       providerKey: "prov:indiv",
-      channelCode: "VINDZAM",
+      authorityChannelCode: "VINDZAM",
       regionKey: null,
       authAssuranceLevel: "AL1",
       stepUpVerified: false,

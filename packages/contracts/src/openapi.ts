@@ -155,7 +155,7 @@ export const openApiDocument = {
             name: "providerId",
             in: "path",
             required: true,
-            schema: { type: "string" }
+            schema: { type: "string", format: "uuid" }
           }
         ],
         responses: {
@@ -176,7 +176,7 @@ export const openApiDocument = {
         parameters: [
           { name: "cursor", in: "query", schema: { type: "string" } },
           { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 50, default: 10 } },
-          { name: "provider_id", in: "query", schema: { type: "string" } }
+          { name: "provider_id", in: "query", schema: { type: "string", format: "uuid" } }
         ],
         responses: {
           "200": {
@@ -193,7 +193,7 @@ export const openApiDocument = {
         tags: ["Public Catalog"],
         summary: "Get published channel listing detail",
         parameters: [
-          { name: "publicationId", in: "path", required: true, schema: { type: "string" } }
+          { name: "publicationId", in: "path", required: true, schema: { type: "string", format: "uuid" } }
         ],
         responses: {
           "200": {
@@ -212,7 +212,7 @@ export const openApiDocument = {
         summary: "Get provider profile detail for authorized tenant",
         security: [{ cookieAuth: [] }],
         parameters: [
-          { name: "providerId", in: "path", required: true, schema: { type: "string" } }
+          { name: "providerId", in: "path", required: true, schema: { type: "string", format: "uuid" } }
         ],
         responses: {
           "200": {
@@ -232,7 +232,7 @@ export const openApiDocument = {
         summary: "List provider offerings with pagination",
         security: [{ cookieAuth: [] }],
         parameters: [
-          { name: "providerId", in: "path", required: true, schema: { type: "string" } },
+          { name: "providerId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
           { name: "cursor", in: "query", schema: { type: "string" } },
           { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 50, default: 10 } },
           { name: "status", in: "query", schema: { type: "string" } }
@@ -255,7 +255,7 @@ export const openApiDocument = {
         summary: "Get catalog offering detail including linked resources",
         security: [{ cookieAuth: [] }],
         parameters: [
-          { name: "offeringId", in: "path", required: true, schema: { type: "string" } }
+          { name: "offeringId", in: "path", required: true, schema: { type: "string", format: "uuid" } }
         ],
         responses: {
           "200": {
@@ -275,7 +275,7 @@ export const openApiDocument = {
         summary: "Get catalog package detail including items",
         security: [{ cookieAuth: [] }],
         parameters: [
-          { name: "packageId", in: "path", required: true, schema: { type: "string" } }
+          { name: "packageId", in: "path", required: true, schema: { type: "string", format: "uuid" } }
         ],
         responses: {
           "200": {
@@ -509,7 +509,7 @@ export const openApiDocument = {
         type: "object",
         required: ["id", "display_name", "provider_type", "status", "created_at"],
         properties: {
-          id: { type: "string" },
+          id: { type: "string", format: "uuid" },
           display_name: { type: "string" },
           provider_type: { type: "string" },
           status: { type: "string" },
@@ -530,10 +530,10 @@ export const openApiDocument = {
         type: "object",
         required: ["id", "provider_id", "offering_id", "package_id", "channel_code", "publication_status", "title", "description", "effective_from", "created_at"],
         properties: {
-          id: { type: "string" },
-          provider_id: { type: "string" },
-          offering_id: { type: ["string", "null"] },
-          package_id: { type: ["string", "null"] },
+          id: { type: "string", format: "uuid" },
+          provider_id: { type: "string", format: "uuid" },
+          offering_id: { type: ["string", "null"], format: "uuid" },
+          package_id: { type: ["string", "null"], format: "uuid" },
           channel_code: { type: "string" },
           publication_status: { type: "string" },
           title: { type: "string" },
@@ -567,39 +567,39 @@ export const openApiDocument = {
         type: "object",
         required: ["id", "provider_id", "provider", "offering_id", "offering", "package_id", "package", "channel_code", "publication_status", "effective_from", "created_at"],
         properties: {
-          id: { type: "string" },
-          provider_id: { type: "string" },
+          id: { type: "string", format: "uuid" },
+          provider_id: { type: "string", format: "uuid" },
           provider: {
             type: "object",
             required: ["id", "display_name", "provider_type"],
             properties: {
-              id: { type: "string" },
+              id: { type: "string", format: "uuid" },
               display_name: { type: "string" },
               provider_type: { type: "string" }
             },
             additionalProperties: false
           },
-          offering_id: { type: ["string", "null"] },
+          offering_id: { type: ["string", "null"], format: "uuid" },
           offering: {
             type: ["object", "null"],
             required: ["id", "offering_code", "title", "description"],
             properties: {
-              id: { type: "string" },
+              id: { type: "string", format: "uuid" },
               offering_code: { type: "string" },
               title: { type: "string" },
               description: { type: ["string", "null"] }
             },
             additionalProperties: false
           },
-          package_id: { type: ["string", "null"] },
+          package_id: { type: ["string", "null"], format: "uuid" },
           package: {
             type: ["object", "null"],
             required: ["id", "package_code", "title", "anchor_offering_id"],
             properties: {
-              id: { type: "string" },
+              id: { type: "string", format: "uuid" },
               package_code: { type: "string" },
               title: { type: "string" },
-              anchor_offering_id: { type: "string" }
+              anchor_offering_id: { type: "string", format: "uuid" }
             },
             additionalProperties: false
           },
@@ -623,13 +623,13 @@ export const openApiDocument = {
         type: "object",
         required: ["id", "display_name", "legal_name", "provider_type", "status", "owning_organization_id", "owning_person_id", "created_at", "updated_at"],
         properties: {
-          id: { type: "string" },
+          id: { type: "string", format: "uuid" },
           display_name: { type: "string" },
           legal_name: { type: "string" },
           provider_type: { type: "string" },
           status: { type: "string" },
-          owning_organization_id: { type: ["string", "null"] },
-          owning_person_id: { type: ["string", "null"] },
+          owning_organization_id: { type: ["string", "null"], format: "uuid" },
+          owning_person_id: { type: ["string", "null"], format: "uuid" },
           created_at: { type: "string" },
           updated_at: { type: "string" }
         },
@@ -648,8 +648,8 @@ export const openApiDocument = {
         type: "object",
         required: ["id", "provider_profile_id", "offering_code", "title", "description", "status", "created_at"],
         properties: {
-          id: { type: "string" },
-          provider_profile_id: { type: "string" },
+          id: { type: "string", format: "uuid" },
+          provider_profile_id: { type: "string", format: "uuid" },
           offering_code: { type: "string" },
           title: { type: "string" },
           description: { type: ["string", "null"] },
@@ -682,8 +682,8 @@ export const openApiDocument = {
         type: "object",
         required: ["id", "provider_profile_id", "offering_code", "title", "description", "status", "resources", "created_at", "updated_at"],
         properties: {
-          id: { type: "string" },
-          provider_profile_id: { type: "string" },
+          id: { type: "string", format: "uuid" },
+          provider_profile_id: { type: "string", format: "uuid" },
           offering_code: { type: "string" },
           title: { type: "string" },
           description: { type: ["string", "null"] },
@@ -694,7 +694,7 @@ export const openApiDocument = {
               type: "object",
               required: ["resource_id", "resource_code", "title", "resource_type", "quantity"],
               properties: {
-                resource_id: { type: "string" },
+                resource_id: { type: "string", format: "uuid" },
                 resource_code: { type: "string" },
                 title: { type: "string" },
                 resource_type: { type: "string" },
@@ -721,11 +721,11 @@ export const openApiDocument = {
         type: "object",
         required: ["id", "provider_profile_id", "package_code", "title", "anchor_offering_id", "status", "items", "created_at", "updated_at"],
         properties: {
-          id: { type: "string" },
-          provider_profile_id: { type: "string" },
+          id: { type: "string", format: "uuid" },
+          provider_profile_id: { type: "string", format: "uuid" },
           package_code: { type: "string" },
           title: { type: "string" },
-          anchor_offering_id: { type: "string" },
+          anchor_offering_id: { type: "string", format: "uuid" },
           status: { type: "string" },
           items: {
             type: "array",
@@ -733,7 +733,7 @@ export const openApiDocument = {
               type: "object",
               required: ["offering_id", "offering_code", "title", "quantity", "is_optional"],
               properties: {
-                offering_id: { type: "string" },
+                offering_id: { type: "string", format: "uuid" },
                 offering_code: { type: "string" },
                 title: { type: "string" },
                 quantity: { type: "integer" },
