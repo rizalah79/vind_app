@@ -286,6 +286,46 @@ export const openApiDocument = {
           "404": { $ref: "#/components/responses/Problem" }
         }
       }
+    },
+    "/api/v1/public/media/{mediaId}/delivery": {
+      get: {
+        operationId: "getPublicMediaDelivery",
+        tags: ["Media Delivery"],
+        summary: "Get public safe media delivery URL",
+        parameters: [
+          { name: "mediaId", in: "path", required: true, schema: { type: "string", format: "uuid" } }
+        ],
+        responses: {
+          "200": {
+            description: "Public safe media delivery metadata and short-lived URL.",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/MediaDeliveryEnvelope" } } }
+          },
+          "400": { $ref: "#/components/responses/Problem" },
+          "404": { $ref: "#/components/responses/Problem" },
+          "503": { $ref: "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/media/{mediaId}/delivery": {
+      get: {
+        operationId: "getAuthenticatedMediaDelivery",
+        tags: ["Media Delivery"],
+        summary: "Get authenticated safe media delivery URL",
+        security: [{ cookieAuth: [] }],
+        parameters: [
+          { name: "mediaId", in: "path", required: true, schema: { type: "string", format: "uuid" } }
+        ],
+        responses: {
+          "200": {
+            description: "Authenticated safe media delivery metadata and short-lived URL.",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/MediaDeliveryEnvelope" } } }
+          },
+          "400": { $ref: "#/components/responses/Problem" },
+          "401": { $ref: "#/components/responses/Problem" },
+          "404": { $ref: "#/components/responses/Problem" },
+          "503": { $ref: "#/components/responses/Problem" }
+        }
+      }
     }
   },
   components: {
@@ -751,6 +791,37 @@ export const openApiDocument = {
         required: ["data", "meta"],
         properties: {
           data: { $ref: "#/components/schemas/PackageDetail" },
+          meta: { $ref: "#/components/schemas/ResponseMeta" }
+        },
+        additionalProperties: false
+      },
+      MediaDelivery: {
+        type: "object",
+        required: [
+          "media_id",
+          "content_type",
+          "file_name",
+          "file_size_bytes",
+          "checksum_sha256",
+          "delivery_url",
+          "expires_at"
+        ],
+        properties: {
+          media_id: { type: "string", format: "uuid" },
+          content_type: { type: "string" },
+          file_name: { type: "string" },
+          file_size_bytes: { type: "integer" },
+          checksum_sha256: { type: "string" },
+          delivery_url: { type: "string" },
+          expires_at: { type: "string" }
+        },
+        additionalProperties: false
+      },
+      MediaDeliveryEnvelope: {
+        type: "object",
+        required: ["data", "meta"],
+        properties: {
+          data: { $ref: "#/components/schemas/MediaDelivery" },
           meta: { $ref: "#/components/schemas/ResponseMeta" }
         },
         additionalProperties: false
