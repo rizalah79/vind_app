@@ -800,18 +800,12 @@ export const openApiDocument = {
         required: [
           "media_id",
           "content_type",
-          "file_name",
-          "file_size_bytes",
-          "checksum_sha256",
           "delivery_url",
           "expires_at"
         ],
         properties: {
           media_id: { type: "string", format: "uuid" },
           content_type: { type: "string" },
-          file_name: { type: "string" },
-          file_size_bytes: { type: "integer" },
-          checksum_sha256: { type: "string" },
           delivery_url: { type: "string" },
           expires_at: { type: "string" }
         },

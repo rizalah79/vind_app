@@ -4,9 +4,6 @@ export interface MediaDeliveryRequest {
   mediaId: string;
   storagePath: string;
   mimeType: string;
-  fileName: string;
-  fileSizeBytes: bigint | number;
-  checksumSha256: string;
 }
 
 export interface MediaDeliveryResult {
@@ -26,10 +23,10 @@ export interface MediaDeliveryAdapter {
 }
 
 export interface LocalMediaDeliveryAdapterOptions {
-  signingSecret?: string;
-  baseUrl?: string;
-  expiresInSeconds?: number;
-  shouldFailForTesting?: boolean;
+  signingSecret?: string | undefined;
+  baseUrl?: string | undefined;
+  expiresInSeconds?: number | undefined;
+  shouldFailForTesting?: boolean | undefined;
 }
 
 export class LocalMediaDeliveryAdapter implements MediaDeliveryAdapter {
@@ -39,10 +36,20 @@ export class LocalMediaDeliveryAdapter implements MediaDeliveryAdapter {
   private shouldFailForTesting: boolean;
 
   constructor(options: LocalMediaDeliveryAdapterOptions = {}) {
-    this.signingSecret = options.signingSecret || process.env.MEDIA_DELIVERY_SIGNING_SECRET || "vind_media_delivery_local_secret_key_32b";
-    this.baseUrl = options.baseUrl || process.env.MEDIA_DELIVERY_BASE_URL || "https://media.cdn.vind.app/delivery";
-    this.expiresInSeconds = options.expiresInSeconds || 900; // 15 minutes default
-    this.shouldFailForTesting = options.shouldFailForTesting || false;
+    const secret = options.signingSecret ?? process.env.MEDIA_DELIVERY_SIGNING_SECRET;
+    const url = options.baseUrl ?? process.env.MEDIA_DELIVERY_BASE_URL;
+
+    if (!secret || !secret.trim()) {
+      throw new Error("FATAL: Media delivery infrastructure unconfigured. Explicit signing secret is required.");
+    }
+    if (!url || !url.trim()) {
+      throw new Error("FATAL: Media delivery infrastructure unconfigured. Explicit base URL is required.");
+    }
+
+    this.signingSecret = secret.trim();
+    this.baseUrl = url.trim();
+    this.expiresInSeconds = options.expiresInSeconds ?? 900; // 15 minutes default
+    this.shouldFailForTesting = options.shouldFailForTesting ?? false;
   }
 
   setShouldFailForTesting(shouldFail: boolean): void {
@@ -57,7 +64,7 @@ export class LocalMediaDeliveryAdapter implements MediaDeliveryAdapter {
     const expiresAtDate = new Date(Date.now() + this.expiresInSeconds * 1000);
     const expiresAtISO = expiresAtDate.toISOString();
 
-    const signaturePayload = `${request.mediaId}:${request.checksumSha256}:${expiresAtISO}`;
+    const signaturePayload = `${request.mediaId}:${expiresAtISO}`;
     const hmac = crypto.createHmac("sha256", this.signingSecret);
     hmac.update(signaturePayload);
     const signature = hmac.digest("hex");
@@ -71,6 +78,6 @@ export class LocalMediaDeliveryAdapter implements MediaDeliveryAdapter {
   }
 }
 
-export function createDefaultMediaDeliveryAdapter(options: LocalMediaDeliveryAdapterOptions = {}): MediaDeliveryAdapter {
+export function createLocalMediaDeliveryAdapter(options: LocalMediaDeliveryAdapterOptions = {}): MediaDeliveryAdapter {
   return new LocalMediaDeliveryAdapter(options);
 }

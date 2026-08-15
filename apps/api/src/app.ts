@@ -29,7 +29,7 @@ import { type DatabaseClient } from "@vind/database";
 import { registerPublicCatalogRoutes } from "./catalog/public-catalog-routes.js";
 import { registerAuthenticatedCatalogRoutes } from "./catalog/authenticated-catalog-routes.js";
 import { registerMediaRoutes } from "./media/media-routes.js";
-import { createDefaultMediaDeliveryAdapter, type MediaDeliveryAdapter } from "./media/delivery-adapter.js";
+import { createLocalMediaDeliveryAdapter, type MediaDeliveryAdapter } from "./media/delivery-adapter.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -151,8 +151,10 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     throw new Error("Both sessionStore and channelHostConfig must be supplied together to enable auth routes.");
   }
 
-  const mediaDeliveryAdapter =
-    options.mediaDeliveryAdapter ?? createDefaultMediaDeliveryAdapter();
+  let mediaDeliveryAdapter = options.mediaDeliveryAdapter;
+  if (!mediaDeliveryAdapter && process.env.MEDIA_DELIVERY_SIGNING_SECRET && process.env.MEDIA_DELIVERY_BASE_URL) {
+    mediaDeliveryAdapter = createLocalMediaDeliveryAdapter();
+  }
 
   if (options.channelHostConfig && options.domainDbClient) {
     registerPublicCatalogRoutes(app, {

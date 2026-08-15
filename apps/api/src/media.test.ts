@@ -179,6 +179,7 @@ describe("B4 — Media Delivery Contract APIs", () => {
 
   const testDeliveryAdapter = new LocalMediaDeliveryAdapter({
     signingSecret: "test_secret_for_b4_acceptance_key",
+    baseUrl: "https://media.cdn.test/delivery",
     expiresInSeconds: 900
   });
 
@@ -200,9 +201,9 @@ describe("B4 — Media Delivery Contract APIs", () => {
     const body = response.json();
     assert.equal(body.data.media_id, safeActiveAsset.id);
     assert.equal(body.data.content_type, "image/jpeg");
-    assert.equal(body.data.file_name, "hero_banner.jpg");
-    assert.equal(body.data.file_size_bytes, 123456);
-    assert.equal(body.data.checksum_sha256, safeActiveAsset.checksum_sha256);
+    assert.equal(body.data.file_name, undefined);
+    assert.equal(body.data.file_size_bytes, undefined);
+    assert.equal(body.data.checksum_sha256, undefined);
     assert.equal(typeof body.data.delivery_url, "string");
     assert.equal(typeof body.data.expires_at, "string");
     assert.equal(body.meta.request_id !== undefined, true);

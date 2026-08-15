@@ -13,10 +13,20 @@ export function registerMediaRoutes(
     dbClient: DatabaseClient;
     sessionStore: SessionStore;
     channelHostConfig: ChannelHostConfig;
-    mediaDeliveryAdapter: MediaDeliveryAdapter;
+    mediaDeliveryAdapter?: MediaDeliveryAdapter | undefined;
   }
 ): void {
   const { dbClient, sessionStore, channelHostConfig, mediaDeliveryAdapter } = options;
+
+  async function getDeliveryAdapter(): Promise<MediaDeliveryAdapter> {
+    if (!mediaDeliveryAdapter) {
+      throw new HttpProblemError({
+        code: "DEPENDENCY_UNAVAILABLE",
+        detail: "Media delivery infrastructure is unconfigured."
+      });
+    }
+    return mediaDeliveryAdapter;
+  }
 
   async function prepareRequestContext(request: FastifyRequest): Promise<RequestContextV2Params> {
     const token = parseSessionCookieToken(request.headers as Record<string, string | string[] | undefined>);
@@ -59,6 +69,7 @@ export function registerMediaRoutes(
   app.get<{ Params: { mediaId: string } }>(
     "/api/v1/public/media/:mediaId/delivery",
     async (request, reply) => {
+      const adapter = await getDeliveryAdapter();
       const mediaId = validateUuid(request.params.mediaId, "mediaId");
       const channel = resolveCanonicalChannel(request.headers.host, channelHostConfig);
       const now = new Date();
@@ -93,13 +104,10 @@ export function registerMediaRoutes(
       }
 
       try {
-        const deliveryResult = await mediaDeliveryAdapter.generateDeliveryUrl({
+        const deliveryResult = await adapter.generateDeliveryUrl({
           mediaId: asset.id,
           storagePath: asset.storage_path,
-          mimeType: asset.mime_type,
-          fileName: asset.file_name,
-          fileSizeBytes: asset.file_size_bytes,
-          checksumSha256: asset.checksum_sha256
+          mimeType: asset.mime_type
         });
 
         reply.header("cache-control", "no-store, max-age=0, private");
@@ -109,9 +117,6 @@ export function registerMediaRoutes(
           data: {
             media_id: asset.id,
             content_type: asset.mime_type,
-            file_name: asset.file_name,
-            file_size_bytes: Number(asset.file_size_bytes),
-            checksum_sha256: asset.checksum_sha256,
             delivery_url: deliveryResult.deliveryUrl,
             expires_at: deliveryResult.expiresAt
           },
@@ -135,6 +140,7 @@ export function registerMediaRoutes(
   app.get<{ Params: { mediaId: string } }>(
     "/api/v1/media/:mediaId/delivery",
     async (request, reply) => {
+      const adapter = await getDeliveryAdapter();
       const mediaId = validateUuid(request.params.mediaId, "mediaId");
       const contextParams = await prepareRequestContext(request);
       const now = new Date();
@@ -164,13 +170,10 @@ export function registerMediaRoutes(
       }
 
       try {
-        const deliveryResult = await mediaDeliveryAdapter.generateDeliveryUrl({
+        const deliveryResult = await adapter.generateDeliveryUrl({
           mediaId: asset.id,
           storagePath: asset.storage_path,
-          mimeType: asset.mime_type,
-          fileName: asset.file_name,
-          fileSizeBytes: asset.file_size_bytes,
-          checksumSha256: asset.checksum_sha256
+          mimeType: asset.mime_type
         });
 
         reply.header("cache-control", "no-store, max-age=0, private");
@@ -180,9 +183,6 @@ export function registerMediaRoutes(
           data: {
             media_id: asset.id,
             content_type: asset.mime_type,
-            file_name: asset.file_name,
-            file_size_bytes: Number(asset.file_size_bytes),
-            checksum_sha256: asset.checksum_sha256,
             delivery_url: deliveryResult.deliveryUrl,
             expires_at: deliveryResult.expiresAt
           },
