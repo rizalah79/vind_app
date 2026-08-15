@@ -573,7 +573,7 @@ describe("B2 — Authentication + Request Context V2 (Remediated)", () => {
               DATABASE_URL: "postgresql://vind_user:pass@localhost:5432/vind_db",
               VINDLOKA_ALLOWED_HOSTS: "vindloka.test"
             },
-            dbClient: mockDb
+            sessionDbClient: mockDb
           });
         },
         (err: any) =>
@@ -591,7 +591,7 @@ describe("B2 — Authentication + Request Context V2 (Remediated)", () => {
               DATABASE_URL: "postgresql://vind_user:pass@localhost:5432/vind_db",
               VINDZAM_ALLOWED_HOSTS: "vindzam.test"
             },
-            dbClient: mockDb
+            sessionDbClient: mockDb
           });
         },
         (err: any) =>
@@ -613,7 +613,7 @@ describe("B2 — Authentication + Request Context V2 (Remediated)", () => {
           VINDZAM_ALLOWED_HOSTS: "vindzam.test",
           VINDLOKA_ALLOWED_HOSTS: "vindloka.test"
         },
-        dbClient: mockDb,
+        sessionDbClient: mockDb,
         readinessDependencies: [{ name: "mock", check: async () => {} }]
       });
 

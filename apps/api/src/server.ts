@@ -1,13 +1,35 @@
 import { Client } from "pg";
 import { buildApp } from "./app.js";
 import type { ReadinessDependency } from "./readiness.js";
-import { PostgresSessionStore, type DatabaseClient } from "./auth/postgres-session-store.js";
+import { PostgresSessionStore, type DatabaseClient as SessionDatabaseClient } from "./auth/postgres-session-store.js";
 import { parseChannelHostConfigFromEnv, validateChannelHostConfig } from "./auth/channel.js";
+import { createPrismaClient, type DatabaseClient as DomainDatabaseClient } from "@vind/database";
 
 export interface BuildProductionAppOptions {
   env?: Record<string, string | undefined> | undefined;
-  dbClient?: DatabaseClient | undefined;
+  sessionDbClient?: SessionDatabaseClient | undefined;
+  domainDbClient?: DomainDatabaseClient | undefined;
   readinessDependencies?: readonly ReadinessDependency[] | undefined;
+}
+
+export function isDomainDatabaseClient(client: unknown): client is DomainDatabaseClient {
+  return (
+    typeof client === "object" &&
+    client !== null &&
+    "$queryRaw" in client &&
+    typeof (client as any).$queryRaw === "function" &&
+    "$transaction" in client &&
+    typeof (client as any).$transaction === "function"
+  );
+}
+
+export function isSessionDatabaseClient(client: unknown): client is SessionDatabaseClient {
+  return (
+    typeof client === "object" &&
+    client !== null &&
+    "query" in client &&
+    typeof (client as any).query === "function"
+  );
 }
 
 export async function buildProductionApp(options: BuildProductionAppOptions = {}) {
@@ -21,29 +43,52 @@ export async function buildProductionApp(options: BuildProductionAppOptions = {}
   const channelHostConfig = parseChannelHostConfigFromEnv(env);
   validateChannelHostConfig(channelHostConfig);
 
-  let dbClient: DatabaseClient;
-  let shouldCloseDb = false;
+  let sessionDbClient: SessionDatabaseClient;
+  let shouldCloseSessionDb = false;
 
-  if (options.dbClient) {
-    dbClient = options.dbClient;
+  if (options.sessionDbClient) {
+    if (!isSessionDatabaseClient(options.sessionDbClient)) {
+      throw new Error("FATAL: Invalid sessionDbClient supplied. Expected query-capable session database adapter.");
+    }
+    sessionDbClient = options.sessionDbClient;
   } else {
     const client = new Client({ connectionString: databaseUrl });
     await client.connect();
-    dbClient = client;
-    shouldCloseDb = true;
+    sessionDbClient = client;
+    shouldCloseSessionDb = true;
   }
 
-  const sessionStore = new PostgresSessionStore(dbClient);
+  let domainDbClient: DomainDatabaseClient;
+  let shouldCloseDomainDb = false;
+
+  if (options.domainDbClient) {
+    if (!isDomainDatabaseClient(options.domainDbClient)) {
+      throw new Error("FATAL: Invalid domainDbClient supplied. Expected Prisma DatabaseClient with $queryRaw support.");
+    }
+    domainDbClient = options.domainDbClient;
+  } else {
+    domainDbClient = createPrismaClient(databaseUrl);
+    shouldCloseDomainDb = true;
+  }
+
+  const sessionStore = new PostgresSessionStore(sessionDbClient);
 
   const app = buildApp({
     sessionStore,
     channelHostConfig,
+    domainDbClient,
     ...(options.readinessDependencies ? { readinessDependencies: options.readinessDependencies } : {})
   });
 
-  if (shouldCloseDb && "end" in dbClient && typeof (dbClient as any).end === "function") {
+  if (shouldCloseSessionDb && "end" in sessionDbClient && typeof (sessionDbClient as any).end === "function") {
     app.addHook("onClose", async () => {
-      await (dbClient as any).end().catch(() => {});
+      await (sessionDbClient as any).end().catch(() => {});
+    });
+  }
+
+  if (shouldCloseDomainDb && "$disconnect" in domainDbClient && typeof domainDbClient.$disconnect === "function") {
+    app.addHook("onClose", async () => {
+      await domainDbClient.$disconnect().catch(() => {});
     });
   }
 

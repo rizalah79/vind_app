@@ -25,6 +25,10 @@ import { registerAuthRoutes } from "./auth/auth-routes.js";
 import { type SessionStore } from "./auth/session.js";
 import { type ChannelHostConfig } from "./auth/channel.js";
 
+import { type DatabaseClient } from "@vind/database";
+import { registerPublicCatalogRoutes } from "./catalog/public-catalog-routes.js";
+import { registerAuthenticatedCatalogRoutes } from "./catalog/authenticated-catalog-routes.js";
+
 declare module "fastify" {
   interface FastifyRequest {
     vindRequestId: string;
@@ -35,6 +39,7 @@ export interface BuildAppOptions {
   readinessDependencies?: readonly ReadinessDependency[];
   sessionStore?: SessionStore | undefined;
   channelHostConfig?: ChannelHostConfig | undefined;
+  domainDbClient?: DatabaseClient | undefined;
 }
 
 function getProblemInstance(request: FastifyRequest): string {
@@ -128,7 +133,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     }
 
     return createEnvelope({
-      status: "ready",
+      status: "ready"
     }, getRequestId(request));
   });
 
@@ -141,6 +146,21 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     });
   } else if (options.sessionStore || options.channelHostConfig) {
     throw new Error("Both sessionStore and channelHostConfig must be supplied together to enable auth routes.");
+  }
+
+  if (options.channelHostConfig && options.domainDbClient) {
+    registerPublicCatalogRoutes(app, {
+      dbClient: options.domainDbClient,
+      channelHostConfig: options.channelHostConfig
+    });
+  }
+
+  if (options.sessionStore && options.channelHostConfig && options.domainDbClient) {
+    registerAuthenticatedCatalogRoutes(app, {
+      dbClient: options.domainDbClient,
+      sessionStore: options.sessionStore,
+      channelHostConfig: options.channelHostConfig
+    });
   }
 
   return app;
