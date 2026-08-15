@@ -3,6 +3,7 @@ import type { DatabaseClient } from "@vind/database";
 import { HttpProblemError } from "../errors.js";
 import { resolveCanonicalChannel, type ChannelHostConfig } from "../auth/channel.js";
 import { decodeCursor, encodeCursor } from "./cursor.js";
+import { validateLimit, validateUuid } from "./validation.js";
 
 export function registerPublicCatalogRoutes(
   app: FastifyInstance,
@@ -17,21 +18,26 @@ export function registerPublicCatalogRoutes(
   app.get<{ Params: { providerId: string } }>(
     "/api/v1/public/providers/:providerId",
     async (request, reply) => {
-      const { providerId } = request.params;
+      const providerId = validateUuid(request.params.providerId, "providerId");
+      const channel = resolveCanonicalChannel(request.headers.host, channelHostConfig);
 
-      const provider = await dbClient.provider_profiles.findFirst({
-        where: {
-          id: providerId,
-          status: "ACTIVE"
-        },
-        select: {
-          id: true,
-          display_name: true,
-          provider_type: true,
-          status: true,
-          created_at: true
-        }
-      });
+      const rows = await dbClient.$queryRaw<Array<{
+        provider_id: string;
+        display_name: string;
+        provider_type: string;
+        status: string;
+        created_at: Date | string;
+      }>>`
+        SELECT
+          provider_id,
+          display_name,
+          provider_type,
+          status,
+          created_at
+        FROM provider.read_public_provider(${providerId}::uuid, ${channel.code})
+      `;
+
+      const provider = rows[0];
 
       if (!provider) {
         throw new HttpProblemError({
@@ -42,11 +48,11 @@ export function registerPublicCatalogRoutes(
 
       return reply.status(200).send({
         data: {
-          id: provider.id,
+          id: provider.provider_id,
           display_name: provider.display_name,
           provider_type: provider.provider_type,
           status: provider.status,
-          created_at: provider.created_at.toISOString()
+          created_at: new Date(provider.created_at).toISOString()
         },
         meta: {
           request_id: request.vindRequestId
@@ -64,95 +70,73 @@ export function registerPublicCatalogRoutes(
     };
   }>("/api/v1/public/listings", async (request, reply) => {
     const channel = resolveCanonicalChannel(request.headers.host, channelHostConfig);
-    const limitNum = Math.min(Math.max(Number.parseInt(request.query.limit ?? "10", 10) || 10, 1), 50);
+    const limitNum = validateLimit(request.query.limit);
+    const providerIdFilter = request.query.provider_id
+      ? validateUuid(request.query.provider_id, "provider_id")
+      : null;
+
     const cursorStr = request.query.cursor;
-    const providerIdFilter = request.query.provider_id;
+    const cursorPayload = cursorStr !== undefined && cursorStr !== ""
+      ? decodeCursor(cursorStr)
+      : null;
 
-    let cursorPayload = cursorStr ? decodeCursor(cursorStr) : null;
-    const now = new Date();
+    const beforeCreatedAt = cursorPayload ? new Date(cursorPayload.createdAt) : null;
+    const beforePublicationId = cursorPayload ? cursorPayload.id : null;
 
-    const whereCondition: any = {
-      channel_code: channel.code,
-      publication_status: "PUBLISHED",
-      OR: [
-        { effective_from: null },
-        { effective_from: { lte: now } }
-      ],
-      AND: [
-        {
-          OR: [
-            { effective_to: null },
-            { effective_to: { gt: now } }
-          ]
-        },
-        {
-          provider_profiles: {
-            status: "ACTIVE"
-          }
-        }
-      ]
-    };
-
-    if (providerIdFilter) {
-      whereCondition.provider_profile_id = providerIdFilter;
-    }
-
-    if (cursorPayload) {
-      const cursorDate = new Date(cursorPayload.createdAt);
-      whereCondition.AND.push({
-        OR: [
-          { created_at: { lt: cursorDate } },
-          {
-            created_at: cursorDate,
-            id: { lt: cursorPayload.id }
-          }
-        ]
-      });
-    }
-
-    const rows = await dbClient.channel_publications.findMany({
-      where: whereCondition,
-      orderBy: [
-        { created_at: "desc" },
-        { id: "desc" }
-      ],
-      take: limitNum + 1,
-      include: {
-        offerings: {
-          select: {
-            id: true,
-            title: true,
-            description: true
-          }
-        },
-        packages: {
-          select: {
-            id: true,
-            title: true
-          }
-        }
-      }
-    });
+    const rows = await dbClient.$queryRaw<Array<{
+      publication_id: string;
+      provider_id: string;
+      offering_id: string | null;
+      package_id: string | null;
+      channel_code: string;
+      publication_status: string;
+      title: string;
+      description: string | null;
+      effective_from: Date | string | null;
+      created_at: Date | string;
+    }>>`
+      SELECT
+        publication_id,
+        provider_id,
+        offering_id,
+        package_id,
+        channel_code,
+        publication_status,
+        title,
+        description,
+        effective_from,
+        created_at
+      FROM listing.read_public_listings(
+        ${channel.code},
+        ${providerIdFilter}::uuid,
+        ${beforeCreatedAt}::timestamptz,
+        ${beforePublicationId}::uuid,
+        ${limitNum}
+      )
+    `;
 
     const hasMore = rows.length > limitNum;
     const items = hasMore ? rows.slice(0, limitNum) : rows;
     const lastItem = items[items.length - 1];
 
     const nextCursor = hasMore && lastItem
-      ? encodeCursor({ createdAt: lastItem.created_at.toISOString(), id: lastItem.id })
+      ? encodeCursor({
+          createdAt: new Date(lastItem.created_at).toISOString(),
+          id: lastItem.publication_id
+        })
       : null;
 
     const data = items.map((row) => ({
-      id: row.id,
-      provider_id: row.provider_profile_id,
+      id: row.publication_id,
+      provider_id: row.provider_id,
       offering_id: row.offering_id ?? null,
       package_id: row.package_id ?? null,
       channel_code: row.channel_code,
       publication_status: row.publication_status,
-      title: row.offerings?.title ?? row.packages?.title ?? "Listing",
-      description: row.offerings?.description ?? null,
-      effective_from: row.effective_from ? row.effective_from.toISOString() : null,
-      created_at: row.created_at.toISOString()
+      title: row.title,
+      description: row.description ?? null,
+      effective_from: row.effective_from ? new Date(row.effective_from).toISOString() : null,
+      created_at: new Date(row.created_at).toISOString()
     }));
 
     return reply.status(200).send({
@@ -171,62 +155,53 @@ export function registerPublicCatalogRoutes(
   app.get<{ Params: { publicationId: string } }>(
     "/api/v1/public/listings/:publicationId",
     async (request, reply) => {
+      const publicationId = validateUuid(request.params.publicationId, "publicationId");
       const channel = resolveCanonicalChannel(request.headers.host, channelHostConfig);
-      const { publicationId } = request.params;
-      const now = new Date();
 
-      const publication = await dbClient.channel_publications.findFirst({
-        where: {
-          id: publicationId,
-          channel_code: channel.code,
-          publication_status: "PUBLISHED",
-          OR: [
-            { effective_from: null },
-            { effective_from: { lte: now } }
-          ],
-          AND: [
-            {
-              OR: [
-                { effective_to: null },
-                { effective_to: { gt: now } }
-              ]
-            },
-            {
-              provider_profiles: {
-                status: "ACTIVE"
-              }
-            }
-          ]
-        },
-        include: {
-          provider_profiles: {
-            select: {
-              id: true,
-              display_name: true,
-              provider_type: true,
-              status: true
-            }
-          },
-          offerings: {
-            select: {
-              id: true,
-              offering_code: true,
-              title: true,
-              description: true
-            }
-          },
-          packages: {
-            select: {
-              id: true,
-              package_code: true,
-              title: true,
-              anchor_offering_id: true
-            }
-          }
-        }
-      });
+      const rows = await dbClient.$queryRaw<Array<{
+        publication_id: string;
+        provider_id: string;
+        provider_display_name: string;
+        provider_type: string;
+        offering_id: string | null;
+        offering_code: string | null;
+        offering_title: string | null;
+        offering_description: string | null;
+        package_id: string | null;
+        package_code: string | null;
+        package_title: string | null;
+        package_anchor_offering_id: string | null;
+        channel_code: string;
+        publication_status: string;
+        effective_from: Date | string | null;
+        created_at: Date | string;
+      }>>`
+        SELECT
+          publication_id,
+          provider_id,
+          provider_display_name,
+          provider_type,
+          offering_id,
+          offering_code,
+          offering_title,
+          offering_description,
+          package_id,
+          package_code,
+          package_title,
+          package_anchor_offering_id,
+          channel_code,
+          publication_status,
+          effective_from,
+          created_at
+        FROM listing.read_public_listing(
+          ${publicationId}::uuid,
+          ${channel.code}
+        )
+      `;
 
-      if (!publication || publication.provider_profiles.status !== "ACTIVE") {
+      const publication = rows[0];
+
+      if (!publication) {
         throw new HttpProblemError({
           code: "RESOURCE_NOT_FOUND",
           detail: "Channel publication listing not found."
@@ -235,35 +210,35 @@ export function registerPublicCatalogRoutes(
 
       return reply.status(200).send({
         data: {
-          id: publication.id,
-          provider_id: publication.provider_profile_id,
+          id: publication.publication_id,
+          provider_id: publication.provider_id,
           provider: {
-            id: publication.provider_profiles.id,
-            display_name: publication.provider_profiles.display_name,
-            provider_type: publication.provider_profiles.provider_type
+            id: publication.provider_id,
+            display_name: publication.provider_display_name,
+            provider_type: publication.provider_type
           },
           offering_id: publication.offering_id ?? null,
-          offering: publication.offerings
+          offering: publication.offering_id
             ? {
-                id: publication.offerings.id,
-                offering_code: publication.offerings.offering_code,
-                title: publication.offerings.title,
-                description: publication.offerings.description ?? null
+                id: publication.offering_id,
+                offering_code: publication.offering_code!,
+                title: publication.offering_title!,
+                description: publication.offering_description ?? null
               }
             : null,
           package_id: publication.package_id ?? null,
-          package: publication.packages
+          package: publication.package_id
             ? {
-                id: publication.packages.id,
-                package_code: publication.packages.package_code,
-                title: publication.packages.title,
-                anchor_offering_id: publication.packages.anchor_offering_id
+                id: publication.package_id,
+                package_code: publication.package_code!,
+                title: publication.package_title!,
+                anchor_offering_id: publication.package_anchor_offering_id!
               }
             : null,
           channel_code: publication.channel_code,
           publication_status: publication.publication_status,
-          effective_from: publication.effective_from ? publication.effective_from.toISOString() : null,
-          created_at: publication.created_at.toISOString()
+          effective_from: publication.effective_from ? new Date(publication.effective_from).toISOString() : null,
+          created_at: new Date(publication.created_at).toISOString()
         },
         meta: {
           request_id: request.vindRequestId

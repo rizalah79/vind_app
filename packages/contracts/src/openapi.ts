@@ -163,6 +163,7 @@ export const openApiDocument = {
             description: "Active public provider profile.",
             content: { "application/json": { schema: { $ref: "#/components/schemas/PublicProviderProfileEnvelope" } } }
           },
+          "400": { $ref: "#/components/responses/Problem" },
           "404": { $ref: "#/components/responses/Problem" }
         }
       }
@@ -199,6 +200,7 @@ export const openApiDocument = {
             description: "Published channel listing detail.",
             content: { "application/json": { schema: { $ref: "#/components/schemas/PublicListingDetailEnvelope" } } }
           },
+          "400": { $ref: "#/components/responses/Problem" },
           "404": { $ref: "#/components/responses/Problem" }
         }
       }
@@ -217,6 +219,7 @@ export const openApiDocument = {
             description: "Provider profile detail.",
             content: { "application/json": { schema: { $ref: "#/components/schemas/ProviderDetailEnvelope" } } }
           },
+          "400": { $ref: "#/components/responses/Problem" },
           "401": { $ref: "#/components/responses/Problem" },
           "404": { $ref: "#/components/responses/Problem" }
         }
@@ -239,6 +242,7 @@ export const openApiDocument = {
             description: "Paginated list of provider offerings.",
             content: { "application/json": { schema: { $ref: "#/components/schemas/OfferingSummariesEnvelope" } } }
           },
+          "400": { $ref: "#/components/responses/Problem" },
           "401": { $ref: "#/components/responses/Problem" },
           "404": { $ref: "#/components/responses/Problem" }
         }
@@ -258,6 +262,7 @@ export const openApiDocument = {
             description: "Catalog offering detail.",
             content: { "application/json": { schema: { $ref: "#/components/schemas/OfferingDetailEnvelope" } } }
           },
+          "400": { $ref: "#/components/responses/Problem" },
           "401": { $ref: "#/components/responses/Problem" },
           "404": { $ref: "#/components/responses/Problem" }
         }
@@ -277,6 +282,7 @@ export const openApiDocument = {
             description: "Catalog package detail.",
             content: { "application/json": { schema: { $ref: "#/components/schemas/PackageDetailEnvelope" } } }
           },
+          "400": { $ref: "#/components/responses/Problem" },
           "401": { $ref: "#/components/responses/Problem" },
           "404": { $ref: "#/components/responses/Problem" }
         }

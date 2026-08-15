@@ -39,7 +39,7 @@ export interface BuildAppOptions {
   readinessDependencies?: readonly ReadinessDependency[];
   sessionStore?: SessionStore | undefined;
   channelHostConfig?: ChannelHostConfig | undefined;
-  dbClient?: any;
+  domainDbClient?: DatabaseClient | undefined;
 }
 
 function getProblemInstance(request: FastifyRequest): string {
@@ -133,7 +133,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     }
 
     return createEnvelope({
-      status: "ready",
+      status: "ready"
     }, getRequestId(request));
   });
 
@@ -148,16 +148,16 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     throw new Error("Both sessionStore and channelHostConfig must be supplied together to enable auth routes.");
   }
 
-  if (options.channelHostConfig && options.dbClient) {
+  if (options.channelHostConfig && options.domainDbClient) {
     registerPublicCatalogRoutes(app, {
-      dbClient: options.dbClient,
+      dbClient: options.domainDbClient,
       channelHostConfig: options.channelHostConfig
     });
   }
 
-  if (options.sessionStore && options.channelHostConfig && options.dbClient) {
+  if (options.sessionStore && options.channelHostConfig && options.domainDbClient) {
     registerAuthenticatedCatalogRoutes(app, {
-      dbClient: options.dbClient,
+      dbClient: options.domainDbClient,
       sessionStore: options.sessionStore,
       channelHostConfig: options.channelHostConfig
     });

@@ -123,6 +123,71 @@ describe("B3 — Provider, Catalog, and Listing Read APIs", () => {
 
   function createMockDb(): DatabaseClient {
     return {
+      async $queryRaw(queryStrArr: any, ...values: any[]) {
+        const queryText = Array.isArray(queryStrArr) ? queryStrArr.join("?") : String(queryStrArr);
+
+        if (queryText.includes("read_public_provider")) {
+          const providerId = values[0];
+          if (providerId === mockProviderActive.id) {
+            return [
+              {
+                provider_id: mockProviderActive.id,
+                display_name: mockProviderActive.display_name,
+                provider_type: mockProviderActive.provider_type,
+                status: mockProviderActive.status,
+                created_at: mockProviderActive.created_at
+              }
+            ];
+          }
+          return [];
+        }
+
+        if (queryText.includes("read_public_listings")) {
+          return [
+            {
+              publication_id: mockPublication1.id,
+              provider_id: mockProviderActive.id,
+              offering_id: mockOffering1.id,
+              package_id: null,
+              channel_code: "VINDZAM",
+              publication_status: "PUBLISHED",
+              title: mockOffering1.title,
+              description: mockOffering1.description,
+              effective_from: mockPublication1.effective_from,
+              created_at: mockPublication1.created_at
+            }
+          ];
+        }
+
+        if (queryText.includes("read_public_listing")) {
+          const pubId = values[0];
+          if (pubId === mockPublication1.id) {
+            return [
+              {
+                publication_id: mockPublication1.id,
+                provider_id: mockProviderActive.id,
+                provider_display_name: mockProviderActive.display_name,
+                provider_type: mockProviderActive.provider_type,
+                offering_id: mockOffering1.id,
+                offering_code: mockOffering1.offering_code,
+                offering_title: mockOffering1.title,
+                offering_description: mockOffering1.description,
+                package_id: null,
+                package_code: null,
+                package_title: null,
+                package_anchor_offering_id: null,
+                channel_code: "VINDZAM",
+                publication_status: "PUBLISHED",
+                effective_from: mockPublication1.effective_from,
+                created_at: mockPublication1.created_at
+              }
+            ];
+          }
+          return [];
+        }
+
+        return [];
+      },
       provider_profiles: {
         async findFirst({ where }: any) {
           if (where?.id === mockProviderActive.id) {
@@ -137,7 +202,7 @@ describe("B3 — Provider, Catalog, and Listing Read APIs", () => {
         }
       },
       channel_publications: {
-        async findMany({ where, limit }: any) {
+        async findMany({ where }: any) {
           if (where?.publication_status === "PUBLISHED" && where?.channel_code === "VINDZAM") {
             return [mockPublication1];
           }
@@ -208,7 +273,7 @@ describe("B3 — Provider, Catalog, and Listing Read APIs", () => {
     const app = buildApp({
       sessionStore,
       channelHostConfig,
-      dbClient: mockDb
+      domainDbClient: mockDb
     });
 
     it("GET /api/v1/public/providers/:providerId returns 200 OK with PublicProviderProfile DTO for ACTIVE provider", async () => {
@@ -224,7 +289,6 @@ describe("B3 — Provider, Catalog, and Listing Read APIs", () => {
       assert.equal(body.data.provider_type, "COMPANY");
       assert.equal(body.data.status, "ACTIVE");
       assert.equal(body.data.created_at, mockProviderActive.created_at.toISOString());
-      // Must NOT expose private/internal fields
       assert.equal(body.data.seed_key, undefined);
       assert.equal(body.data.owning_organization_id, undefined);
       assert.equal(body.data.owning_person_id, undefined);
@@ -240,6 +304,16 @@ describe("B3 — Provider, Catalog, and Listing Read APIs", () => {
       assert.equal(response.statusCode, 404);
       const body = response.json();
       assert.equal(body.code, "RESOURCE_NOT_FOUND");
+    });
+
+    it("GET /api/v1/public/providers/:providerId returns 400 VALIDATION_FAILED for invalid UUID", async () => {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/v1/public/providers/not-a-uuid"
+      });
+
+      assert.equal(response.statusCode, 400);
+      assert.equal(response.json().code, "VALIDATION_FAILED");
     });
 
     it("GET /api/v1/public/listings returns 200 OK with published channel listings for matched host", async () => {
@@ -259,6 +333,39 @@ describe("B3 — Provider, Catalog, and Listing Read APIs", () => {
       assert.equal(body.data[0].publication_status, "PUBLISHED");
       assert.equal(body.data[0].title, "Premium Logistics Delivery");
       assert.equal(body.meta.pagination.has_more, false);
+    });
+
+    it("GET /api/v1/public/listings returns 400 VALIDATION_FAILED for invalid provider_id filter", async () => {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/v1/public/listings?provider_id=invalid-uuid",
+        headers: { host: "vindzam.test" }
+      });
+
+      assert.equal(response.statusCode, 400);
+      assert.equal(response.json().code, "VALIDATION_FAILED");
+    });
+
+    it("GET /api/v1/public/listings returns 400 VALIDATION_FAILED for invalid limit parameter", async () => {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/v1/public/listings?limit=invalid",
+        headers: { host: "vindzam.test" }
+      });
+
+      assert.equal(response.statusCode, 400);
+      assert.equal(response.json().code, "VALIDATION_FAILED");
+    });
+
+    it("GET /api/v1/public/listings returns 400 VALIDATION_FAILED for malformed cursor payload", async () => {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/v1/public/listings?cursor=malformed_cursor_payload",
+        headers: { host: "vindzam.test" }
+      });
+
+      assert.equal(response.statusCode, 400);
+      assert.equal(response.json().code, "VALIDATION_FAILED");
     });
 
     it("GET /api/v1/public/listings/:publicationId returns 200 OK with listing detail", async () => {
@@ -285,12 +392,23 @@ describe("B3 — Provider, Catalog, and Listing Read APIs", () => {
       assert.equal(response.statusCode, 404);
       assert.equal(response.json().code, "RESOURCE_NOT_FOUND");
     });
+
+    it("GET /api/v1/public/listings/:publicationId returns 400 for invalid publicationId UUID", async () => {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/v1/public/listings/invalid-pub-id",
+        headers: { host: "vindzam.test" }
+      });
+
+      assert.equal(response.statusCode, 400);
+      assert.equal(response.json().code, "VALIDATION_FAILED");
+    });
   });
 
   describe("Authenticated Endpoints", () => {
     const sessionStore = new TestInMemorySessionStore();
     sessionStore.addSession("valid_human_token", {
-      sessionKey: "sess_123",
+      sessionId: "sess_123",
       actorKind: "HUMAN",
       authorityPlane: "LOCAL",
       accountKey: "acc_human_123",
@@ -299,7 +417,8 @@ describe("B3 — Provider, Catalog, and Listing Read APIs", () => {
       localAssignmentKey: "asg_local_123",
       organizationKey: "org_123",
       providerKey: mockProviderActive.id,
-      idleExpiresAt: new Date(Date.now() + 3600000),
+      authAssuranceLevel: "AL1",
+      stepUpVerified: false,
       absoluteExpiresAt: new Date(Date.now() + 86400000)
     });
 
@@ -307,7 +426,7 @@ describe("B3 — Provider, Catalog, and Listing Read APIs", () => {
     const app = buildApp({
       sessionStore,
       channelHostConfig,
-      dbClient: mockDb
+      domainDbClient: mockDb
     });
 
     it("GET /api/v1/providers/:providerId returns 401 AUTHENTICATION_REQUIRED when unauthenticated", async () => {
@@ -318,6 +437,20 @@ describe("B3 — Provider, Catalog, and Listing Read APIs", () => {
 
       assert.equal(response.statusCode, 401);
       assert.equal(response.json().code, "AUTHENTICATION_REQUIRED");
+    });
+
+    it("GET /api/v1/providers/:providerId returns 400 VALIDATION_FAILED for malformed providerId", async () => {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/v1/providers/invalid-provider-id",
+        headers: {
+          host: "vindzam.test",
+          cookie: "vind_session=valid_human_token"
+        }
+      });
+
+      assert.equal(response.statusCode, 400);
+      assert.equal(response.json().code, "VALIDATION_FAILED");
     });
 
     it("GET /api/v1/providers/:providerId returns 200 OK with ProviderDetail DTO for valid session", async () => {
@@ -370,6 +503,20 @@ describe("B3 — Provider, Catalog, and Listing Read APIs", () => {
       assert.equal(body.data.resources[0].quantity, 2);
     });
 
+    it("GET /api/v1/catalog/offerings/:offeringId returns 400 for invalid offeringId UUID", async () => {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/v1/catalog/offerings/bad-offering-id",
+        headers: {
+          host: "vindzam.test",
+          cookie: "vind_session=valid_human_token"
+        }
+      });
+
+      assert.equal(response.statusCode, 400);
+      assert.equal(response.json().code, "VALIDATION_FAILED");
+    });
+
     it("GET /api/v1/catalog/packages/:packageId returns 200 OK with PackageDetail DTO and package items", async () => {
       const response = await app.inject({
         method: "GET",
@@ -385,6 +532,20 @@ describe("B3 — Provider, Catalog, and Listing Read APIs", () => {
       assert.equal(body.data.id, mockPackage1.id);
       assert.equal(body.data.anchor_offering_id, mockOffering1.id);
       assert.equal(body.data.items[0].offering_code, "OFF-001");
+    });
+
+    it("GET /api/v1/catalog/packages/:packageId returns 400 for invalid packageId UUID", async () => {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/v1/catalog/packages/bad-package-id",
+        headers: {
+          host: "vindzam.test",
+          cookie: "vind_session=valid_human_token"
+        }
+      });
+
+      assert.equal(response.statusCode, 400);
+      assert.equal(response.json().code, "VALIDATION_FAILED");
     });
   });
 });

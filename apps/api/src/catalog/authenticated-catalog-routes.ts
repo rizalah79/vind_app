@@ -5,6 +5,7 @@ import { parseSessionCookieToken, type SessionStore } from "../auth/session.js";
 import { resolveCanonicalChannel, type ChannelHostConfig } from "../auth/channel.js";
 import { runWithRequestContextV2, type RequestContextV2Params } from "../auth/request-context-v2.js";
 import { decodeCursor, encodeCursor } from "./cursor.js";
+import { validateLimit, validateUuid } from "./validation.js";
 
 export function registerAuthenticatedCatalogRoutes(
   app: FastifyInstance,
@@ -57,8 +58,8 @@ export function registerAuthenticatedCatalogRoutes(
   app.get<{ Params: { providerId: string } }>(
     "/api/v1/providers/:providerId",
     async (request, reply) => {
+      const providerId = validateUuid(request.params.providerId, "providerId");
       const contextParams = await prepareRequestContext(request);
-      const { providerId } = request.params;
 
       const provider = await runWithRequestContextV2(dbClient, contextParams, async (tx: any) => {
         return tx.provider_profiles.findFirst({
@@ -101,13 +102,16 @@ export function registerAuthenticatedCatalogRoutes(
       status?: string;
     };
   }>("/api/v1/providers/:providerId/offerings", async (request, reply) => {
-    const contextParams = await prepareRequestContext(request);
-    const { providerId } = request.params;
-    const limitNum = Math.min(Math.max(Number.parseInt(request.query.limit ?? "10", 10) || 10, 1), 50);
-    const cursorStr = request.query.cursor;
+    const providerId = validateUuid(request.params.providerId, "providerId");
+    const limitNum = validateLimit(request.query.limit);
     const statusFilter = request.query.status;
 
-    let cursorPayload = cursorStr ? decodeCursor(cursorStr) : null;
+    const cursorStr = request.query.cursor;
+    const cursorPayload = cursorStr !== undefined && cursorStr !== ""
+      ? decodeCursor(cursorStr)
+      : null;
+
+    const contextParams = await prepareRequestContext(request);
 
     const result = await runWithRequestContextV2(dbClient, contextParams, async (tx: any) => {
       const provider = await tx.provider_profiles.findFirst({
@@ -126,7 +130,7 @@ export function registerAuthenticatedCatalogRoutes(
         AND: []
       };
 
-      if (statusFilter) {
+      if (statusFilter !== undefined && statusFilter !== "") {
         whereCondition.status = statusFilter;
       }
 
@@ -189,8 +193,8 @@ export function registerAuthenticatedCatalogRoutes(
   app.get<{ Params: { offeringId: string } }>(
     "/api/v1/catalog/offerings/:offeringId",
     async (request, reply) => {
+      const offeringId = validateUuid(request.params.offeringId, "offeringId");
       const contextParams = await prepareRequestContext(request);
-      const { offeringId } = request.params;
 
       const offering = await runWithRequestContextV2(dbClient, contextParams, async (tx: any) => {
         return tx.offerings.findFirst({
@@ -243,8 +247,8 @@ export function registerAuthenticatedCatalogRoutes(
   app.get<{ Params: { packageId: string } }>(
     "/api/v1/catalog/packages/:packageId",
     async (request, reply) => {
+      const packageId = validateUuid(request.params.packageId, "packageId");
       const contextParams = await prepareRequestContext(request);
-      const { packageId } = request.params;
 
       const pkg = await runWithRequestContextV2(dbClient, contextParams, async (tx: any) => {
         return tx.packages.findFirst({
