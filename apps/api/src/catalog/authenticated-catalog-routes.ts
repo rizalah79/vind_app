@@ -102,9 +102,22 @@ export function registerAuthenticatedCatalogRoutes(
       status?: string;
     };
   }>("/api/v1/providers/:providerId/offerings", async (request, reply) => {
+    if (request.query.status !== undefined) {
+      throw new HttpProblemError({
+        code: "VALIDATION_FAILED",
+        detail: "Query parameter 'status' is not supported.",
+        fieldErrors: [
+          {
+            field: "status",
+            code: "UNSUPPORTED_PARAMETER",
+            message: "Query parameter 'status' is not supported."
+          }
+        ]
+      });
+    }
+
     const providerId = validateUuid(request.params.providerId, "providerId");
     const limitNum = validateLimit(request.query.limit);
-    const statusFilter = request.query.status;
 
     const cursorStr = request.query.cursor;
     const cursorPayload = cursorStr !== undefined && cursorStr !== ""
@@ -129,10 +142,6 @@ export function registerAuthenticatedCatalogRoutes(
         provider_profile_id: providerId,
         AND: []
       };
-
-      if (statusFilter !== undefined && statusFilter !== "") {
-        whereCondition.status = statusFilter;
-      }
 
       if (cursorPayload) {
         const cursorDate = new Date(cursorPayload.createdAt);

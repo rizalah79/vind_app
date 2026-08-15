@@ -234,8 +234,7 @@ export const openApiDocument = {
         parameters: [
           { name: "providerId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
           { name: "cursor", in: "query", schema: { type: "string" } },
-          { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 50, default: 10 } },
-          { name: "status", in: "query", schema: { type: "string" } }
+          { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 50, default: 10 } }
         ],
         responses: {
           "200": {

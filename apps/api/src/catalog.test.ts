@@ -473,7 +473,7 @@ describe("B3 — Provider, Catalog, and Listing Read APIs", () => {
     it("GET /api/v1/providers/:providerId/offerings returns 200 OK with paginated offering summaries", async () => {
       const response = await app.inject({
         method: "GET",
-        url: `/api/v1/providers/${mockProviderActive.id}/offerings`,
+        url: `/api/v1/providers/${mockProviderActive.id}/offerings?limit=5`,
         headers: {
           host: "vindzam.test",
           cookie: "vind_session=valid_human_token"
@@ -484,6 +484,21 @@ describe("B3 — Provider, Catalog, and Listing Read APIs", () => {
       const body = response.json();
       assert.equal(Array.isArray(body.data), true);
       assert.equal(body.data[0].offering_code, "OFF-001");
+    });
+
+    it("GET /api/v1/providers/:providerId/offerings returns 400 VALIDATION_FAILED if status query parameter is supplied", async () => {
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/v1/providers/${mockProviderActive.id}/offerings?status=ACTIVE`,
+        headers: {
+          host: "vindzam.test",
+          cookie: "vind_session=valid_human_token"
+        }
+      });
+
+      assert.equal(response.statusCode, 400);
+      const body = response.json();
+      assert.equal(body.code, "VALIDATION_FAILED");
     });
 
     it("GET /api/v1/catalog/offerings/:offeringId returns 200 OK with OfferingDetail DTO and linked resources", async () => {
