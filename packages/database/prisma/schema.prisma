@@ -1070,22 +1070,50 @@ model channel_publications {
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
 model media_assets {
-  id                        String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  seed_key                  String?           @unique
-  owner_provider_profile_id String            @db.Uuid
+  id                        String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  seed_key                  String?             @unique
+  owner_provider_profile_id String              @db.Uuid
   media_type                String
   file_name                 String
   file_size_bytes           BigInt
   mime_type                 String
   checksum_sha256           String
   storage_path              String
-  status                    String            @default("ACTIVE")
-  created_at                DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
-  updated_at                DateTime          @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
-  provider_profiles         provider_profiles @relation(fields: [owner_provider_profile_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  status                    String              @default("ACTIVE")
+  created_at                DateTime            @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at                DateTime            @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  provider_profiles         provider_profiles   @relation(fields: [owner_provider_profile_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   media_links               media_links[]
   media_rights              media_rights[]
+  media_derivatives         media_derivatives[]
 
+  @@schema("media")
+}
+
+/// This table contains check constraints and requires additional setup for migrations.
+/// This model contains row level security and requires additional setup for migrations.
+model media_derivatives {
+  id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  source_media_asset_id String    @db.Uuid
+  variant_code          String
+  is_canonical          Boolean   @default(false)
+  content_type          String
+  storage_locator       String
+  checksum_sha256       String
+  scan_status           String
+  moderation_status     String
+  delivery_status       String
+  width_px              Int?
+  height_px             Int?
+  effective_from        DateTime  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  effective_to          DateTime? @db.Timestamptz(6)
+  created_at            DateTime  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at            DateTime  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  media_assets media_assets @relation(fields: [source_media_asset_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([source_media_asset_id], map: "media_derivatives_canonical_source_uidx", where: raw("(is_canonical = true)"))
+  @@unique([storage_locator], map: "media_derivatives_storage_locator_uidx")
   @@schema("media")
 }
 

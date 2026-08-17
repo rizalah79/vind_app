@@ -11,7 +11,10 @@ interface Migration {
   checksum: string;
 }
 
-const RUNNER_VERSION = "1.0.0";
+const RUNNER_VERSION = "1.0.1";
+
+const LEGACY_PROVIDER_WORKSPACE_RLS_MIGRATION =
+  "20260814222000_db_ho_03_01b_provider_catalog_local_read_rls_alignment";
 const ADVISORY_LOCK_KEY_1 = 865241;
 const ADVISORY_LOCK_KEY_2 = 20260805;
 
@@ -121,6 +124,88 @@ async function ensureMigrationLedger(
   `);
 }
 
+async function applyMigrationSql(
+  client: Client,
+  migration: Migration
+): Promise<void> {
+  if (
+    migration.name !==
+    LEGACY_PROVIDER_WORKSPACE_RLS_MIGRATION
+  ) {
+    await client.query(migration.sql);
+    return;
+  }
+
+  const preconditionResult = await client.query(`
+    SELECT c.relname, c.relrowsecurity AS rls_enabled, c.relforcerowsecurity AS force_rls
+    FROM pg_class c
+    JOIN pg_namespace n
+      ON n.oid = c.relnamespace
+    WHERE n.nspname = 'provider'
+      AND c.relname IN ('provider_profiles', 'provider_workspace_links')
+      AND c.relkind = 'r'
+  `);
+
+  if (
+    preconditionResult.rowCount !== 2 ||
+    preconditionResult.rows.some((r) => r.rls_enabled !== true || r.force_rls !== true)
+  ) {
+    throw new Error(
+      "Replay compatibility precondition failed for " +
+      LEGACY_PROVIDER_WORKSPACE_RLS_MIGRATION +
+      ": provider.provider_profiles and provider.provider_workspace_links must exist with relrowsecurity=true and relforcerowsecurity=true."
+    );
+  }
+
+  console.log(
+    `COMPAT   ${migration.name} ` +
+    "(temporarily disabling FORCE RLS inside migration transaction)"
+  );
+
+  await client.query(`
+    ALTER TABLE provider.provider_profiles
+    NO FORCE ROW LEVEL SECURITY
+  `);
+
+  await client.query(`
+    ALTER TABLE provider.provider_workspace_links
+    NO FORCE ROW LEVEL SECURITY
+  `);
+
+  await client.query(migration.sql);
+
+  await client.query(`
+    ALTER TABLE provider.provider_profiles
+    FORCE ROW LEVEL SECURITY
+  `);
+
+  await client.query(`
+    ALTER TABLE provider.provider_workspace_links
+    FORCE ROW LEVEL SECURITY
+  `);
+
+  const postconditionResult = await client.query(`
+    SELECT c.relname, c.relrowsecurity AS rls_enabled, c.relforcerowsecurity AS force_rls
+    FROM pg_class c
+    JOIN pg_namespace n
+      ON n.oid = c.relnamespace
+    WHERE n.nspname = 'provider'
+      AND c.relname IN ('provider_profiles', 'provider_workspace_links')
+      AND c.relkind = 'r'
+  `);
+
+  if (
+    postconditionResult.rowCount !== 2 ||
+    postconditionResult.rows.some((r) => r.rls_enabled !== true || r.force_rls !== true)
+  ) {
+    throw new Error(
+      "Replay compatibility postcondition failed for " +
+      LEGACY_PROVIDER_WORKSPACE_RLS_MIGRATION +
+      ": provider.provider_profiles and provider.provider_workspace_links must have relrowsecurity=true and relforcerowsecurity=true after restore."
+    );
+  }
+}
+
 async function main(): Promise<void> {
   const migrations = await loadMigrations();
   const client = new Client({
@@ -221,7 +306,7 @@ async function main(): Promise<void> {
           "SET LOCAL timezone TO 'UTC'"
         );
 
-        await client.query(migration.sql);
+        await applyMigrationSql(client, migration);
 
         const identityResult = await client.query(`
           SELECT
