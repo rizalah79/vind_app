@@ -35,7 +35,7 @@ function validateLocalConnectionUrl(connectionString: string, label: string): vo
     throw new Error(`${label} must use localhost. Received: ${parsed.hostname}`);
   }
 
-  if (parsed.port && parsed.port !== "5432") {
+  if (parsed.port && parsed.port !== "5432" && parsed.port !== process.env.ISOLATED_PORT) {
     throw new Error(`${label} must use canonical port 5432. Received: ${parsed.port}`);
   }
 

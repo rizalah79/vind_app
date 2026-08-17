@@ -18,7 +18,7 @@ In DB-HO-03-01E forward-fix migration `20260817000000_db_ho_03_01e_security_defi
 
 This makes all DB-HO-03-01 functions fully compatible with:
 - `FORCE ROW LEVEL SECURITY = true` on all application tables.
-- `vind_db_owner = NOBYPASSRLS`.
+- `rolbypassrls=false / NOBYPASSRLS remains enforced` for `vind_db_owner` and `vind_migrator`.
 - `row_security = on` execution under owner policies.
 
 ## WS03 REQUIRED CHANGE
@@ -40,11 +40,11 @@ Refactor `apps/api/src/b3-real-db-acceptance.test.ts` (or the shared API test ha
   - `catalog.offerings`
   - `catalog.packages`
   - `media.media_derivatives`
-- `NOBYPASSRLS` remains `true` for `vind_db_owner` and `vind_migrator`.
+- `rolbypassrls=false / NOBYPASSRLS remains enforced` for `vind_db_owner` and `vind_migrator`.
 - No Request Context V2 or public discovery regressions occur.
 
 ## DEPENDENCY
 WS03 should consume `DB-HO-03-01E` (`20260817000000_db_ho_03_01e_security_definer_force_rls_forward_fix`) after Control Tower approval and merge.
 
 ## CURRENT LOCAL API FILE NOTE
-`apps/api/src/b3-real-db-acceptance.test.ts` has an unapproved working-tree modification from earlier investigation. That diff is NOT included in the WS02 scope, is NOT staged, and MUST be refactored by WS03 under this handoff specification.
+The investigative working-tree diff in `apps/api/src/b3-real-db-acceptance.test.ts` was restored to HEAD prior to PR #11 commit. The API file remains unmodified in WS02, and MUST be refactored by WS03 under this handoff specification.
