@@ -72,65 +72,37 @@ export function registerMediaRoutes(
       const adapter = await getDeliveryAdapter();
       const mediaId = validateUuid(request.params.mediaId, "mediaId");
       const channel = resolveCanonicalChannel(request.headers.host, channelHostConfig);
-      const now = new Date();
 
-      let deliveryRow: {
+      let rows: Array<{
         media_id: string;
+        derivative_id: string;
         storage_locator: string;
         content_type: string;
-      } | null = null;
+        variant_code: string;
+        width_px: number | null;
+        height_px: number | null;
+      }>;
 
       try {
-        if (typeof (dbClient as any).$queryRaw === "function") {
-          const rows = await (dbClient as any).$queryRaw`SELECT * FROM media.read_public_media_delivery(${mediaId}::uuid, ${channel.code}::text)`;
-          if (Array.isArray(rows) && rows.length > 0) {
-            deliveryRow = {
-              media_id: rows[0].media_id,
-              storage_locator: rows[0].storage_locator,
-              content_type: rows[0].content_type
-            };
-          }
+        rows = await (dbClient as any).$queryRaw`SELECT * FROM media.read_public_media_delivery(${mediaId}::uuid, ${channel.code}::text)`;
+      } catch (err: unknown) {
+        if (err instanceof HttpProblemError) {
+          throw err;
         }
-      } catch (e: any) {
-        // Fallback for mock or unmigrated db
-      }
-
-      if (!deliveryRow) {
-        const asset = await dbClient.media_assets.findFirst({
-          where: {
-            id: mediaId,
-            status: "ACTIVE",
-            media_rights: {
-              some: {
-                status: "ACTIVE",
-                effective_from: { lte: now },
-                OR: [{ effective_to: null }, { effective_to: { gt: now } }]
-              }
-            },
-            media_links: {
-              some: {
-                link_status: "ACTIVE",
-                link_role: "PUBLIC_LISTING",
-                effective_from: { lte: now },
-                OR: [{ effective_to: null }, { effective_to: { gt: now } }]
-              }
-            }
-          }
+        throw new HttpProblemError({
+          code: "INTERNAL_ERROR",
+          detail: "Failed to query public media delivery."
         });
-
-        if (!asset) {
-          throw new HttpProblemError({
-            code: "RESOURCE_NOT_FOUND",
-            detail: "Media asset not found or not eligible for public delivery."
-          });
-        }
-
-        deliveryRow = {
-          media_id: asset.id,
-          storage_locator: asset.storage_path,
-          content_type: asset.mime_type
-        };
       }
+
+      if (!Array.isArray(rows) || rows.length === 0) {
+        throw new HttpProblemError({
+          code: "RESOURCE_NOT_FOUND",
+          detail: "Media asset not found or not eligible for public delivery."
+        });
+      }
+
+      const deliveryRow = rows[0];
 
       try {
         const deliveryResult = await adapter.generateDeliveryUrl({
@@ -174,24 +146,38 @@ export function registerMediaRoutes(
       const contextParams = await prepareRequestContext(request);
       const now = new Date();
 
-      const asset = await runWithRequestContextV2(dbClient, contextParams, async (tx: any) => {
-        return tx.media_assets.findFirst({
-          where: {
-            id: mediaId,
-            status: "ACTIVE",
-            ...(contextParams.providerKey ? { owner_provider_profile_id: contextParams.providerKey } : {}),
-            media_rights: {
-              some: {
-                status: "ACTIVE",
-                effective_from: { lte: now },
-                OR: [{ effective_to: null }, { effective_to: { gt: now } }]
-              }
-            }
-          }
-        });
-      });
+      let derivative: {
+        id: string;
+        source_media_asset_id: string;
+        storage_locator: string;
+        content_type: string;
+      } | null = null;
 
-      if (!asset) {
+      try {
+        derivative = await runWithRequestContextV2(dbClient, contextParams, async (tx: any) => {
+          return tx.media_derivatives.findFirst({
+            where: {
+              source_media_asset_id: mediaId,
+              is_canonical: true,
+              scan_status: "CLEAN",
+              moderation_status: "APPROVED",
+              delivery_status: "DELIVERABLE",
+              effective_from: { lte: now },
+              OR: [{ effective_to: null }, { effective_to: { gt: now } }]
+            }
+          });
+        });
+      } catch (err: unknown) {
+        if (err instanceof HttpProblemError) {
+          throw err;
+        }
+        throw new HttpProblemError({
+          code: "INTERNAL_ERROR",
+          detail: "Failed to query media derivative."
+        });
+      }
+
+      if (!derivative) {
         throw new HttpProblemError({
           code: "RESOURCE_NOT_FOUND",
           detail: "Media asset not found or not eligible for delivery."
@@ -200,9 +186,9 @@ export function registerMediaRoutes(
 
       try {
         const deliveryResult = await adapter.generateDeliveryUrl({
-          mediaId: asset.id,
-          storagePath: asset.storage_path,
-          mimeType: asset.mime_type
+          mediaId: mediaId,
+          storageLocator: derivative.storage_locator,
+          mimeType: derivative.content_type
         });
 
         reply.header("cache-control", "no-store, max-age=0, private");
@@ -210,8 +196,8 @@ export function registerMediaRoutes(
 
         return reply.status(200).send({
           data: {
-            media_id: asset.id,
-            content_type: asset.mime_type,
+            media_id: mediaId,
+            content_type: derivative.content_type,
             delivery_url: deliveryResult.deliveryUrl,
             expires_at: deliveryResult.expiresAt
           },

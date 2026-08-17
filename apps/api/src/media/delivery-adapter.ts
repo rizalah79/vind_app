@@ -2,8 +2,7 @@ import crypto from "node:crypto";
 
 export interface MediaDeliveryRequest {
   mediaId: string;
-  storageLocator?: string;
-  storagePath?: string;
+  storageLocator: string;
   mimeType: string;
 }
 
@@ -62,10 +61,14 @@ export class LocalMediaDeliveryAdapter implements MediaDeliveryAdapter {
       throw new StorageDependencyError("Object storage dependency service unavailable");
     }
 
+    if (!request.storageLocator || !request.storageLocator.trim()) {
+      throw new Error("storageLocator is required for media delivery generation.");
+    }
+
     const expiresAtDate = new Date(Date.now() + this.expiresInSeconds * 1000);
     const expiresAtISO = expiresAtDate.toISOString();
 
-    const signaturePayload = `${request.mediaId}:${expiresAtISO}`;
+    const signaturePayload = `${request.mediaId}:${request.storageLocator}:${expiresAtISO}`;
     const hmac = crypto.createHmac("sha256", this.signingSecret);
     hmac.update(signaturePayload);
     const signature = hmac.digest("hex");

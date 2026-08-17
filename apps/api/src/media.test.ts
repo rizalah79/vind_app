@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { buildApp } from "./app.js";
 import type { SessionStore, ResolvedSessionContext } from "./auth/session.js";
 import type { DatabaseClient } from "@vind/database";
-import { LocalMediaDeliveryAdapter, StorageDependencyError } from "./media/delivery-adapter.js";
+import { LocalMediaDeliveryAdapter, StorageDependencyError, type MediaDeliveryRequest } from "./media/delivery-adapter.js";
 
 class TestInMemorySessionStore implements SessionStore {
   private sessions = new Map<string, ResolvedSessionContext>();
@@ -53,9 +53,22 @@ describe("B4 — Media Delivery Contract APIs", () => {
     storage_path: "private/storage/internal/hero_banner_secret.jpg",
     status: "ACTIVE",
     created_at: new Date("2026-08-01T10:00:00.000Z"),
-    updated_at: new Date("2026-08-01T10:00:00.000Z"),
-    media_rights: [{ id: "right-1", status: "ACTIVE", effective_from: new Date("2026-01-01"), effective_to: null }],
-    media_links: [{ id: "link-1", link_role: "PUBLIC_LISTING", link_status: "ACTIVE", effective_from: new Date("2026-01-01"), effective_to: null }]
+    updated_at: new Date("2026-08-01T10:00:00.000Z")
+  };
+
+  const safeDerivative = {
+    id: "00000000-0000-4000-a000-000000000601",
+    source_media_asset_id: safeActiveAsset.id,
+    variant_code: "CANONICAL",
+    is_canonical: true,
+    content_type: "image/jpeg",
+    storage_locator: "canonical/derivatives/safe_active_derivative.jpg",
+    checksum_sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    scan_status: "CLEAN",
+    moderation_status: "APPROVED",
+    delivery_status: "DELIVERABLE",
+    width_px: 1024,
+    height_px: 768
   };
 
   const quarantinedAsset = {
@@ -84,14 +97,12 @@ describe("B4 — Media Delivery Contract APIs", () => {
 
   const rightsIneligibleAsset = {
     ...safeActiveAsset,
-    id: "00000000-0000-4000-a000-000000000506",
-    media_rights: [{ id: "right-2", status: "EXPIRED", effective_from: new Date("2025-01-01"), effective_to: new Date("2025-12-31") }]
+    id: "00000000-0000-4000-a000-000000000506"
   };
 
   const originalWithoutPublicLinkAsset = {
     ...safeActiveAsset,
-    id: "00000000-0000-4000-a000-000000000507",
-    media_links: []
+    id: "00000000-0000-4000-a000-000000000507"
   };
 
   const provider2Asset = {
@@ -100,55 +111,47 @@ describe("B4 — Media Delivery Contract APIs", () => {
     owner_provider_profile_id: mockProvider2.id
   };
 
-  const allAssetsMap = new Map<string, any>([
-    [safeActiveAsset.id, safeActiveAsset],
-    [quarantinedAsset.id, quarantinedAsset],
-    [unsafeAsset.id, unsafeAsset],
-    [infectedAsset.id, infectedAsset],
-    [unreleasedAsset.id, unreleasedAsset],
-    [rightsIneligibleAsset.id, rightsIneligibleAsset],
-    [originalWithoutPublicLinkAsset.id, originalWithoutPublicLinkAsset],
-    [provider2Asset.id, provider2Asset]
-  ]);
-
-  function createMockDb(): DatabaseClient {
+  function createMockDb(shouldDbQueryThrow = false): DatabaseClient {
     const db: any = {
-      async $queryRaw() { return []; },
+      async $queryRaw(strings: TemplateStringsArray, ...values: any[]) {
+        if (shouldDbQueryThrow) {
+          throw new Error("Simulated database failure during read_public_media_delivery query");
+        }
+        const mediaId = values[0];
+        if (mediaId === safeActiveAsset.id) {
+          return [{
+            media_id: safeActiveAsset.id,
+            derivative_id: safeDerivative.id,
+            storage_locator: safeDerivative.storage_locator,
+            content_type: safeDerivative.content_type,
+            variant_code: safeDerivative.variant_code,
+            width_px: safeDerivative.width_px,
+            height_px: safeDerivative.height_px
+          }];
+        }
+        return [];
+      },
       async $executeRawUnsafe() { return 1; },
       async $transaction(fn: any) {
         return fn(db);
       },
-      media_assets: {
+      media_derivatives: {
         async findFirst({ where }: any) {
-          const asset = allAssetsMap.get(where.id);
-          if (!asset) return null;
-          if (where.status && where.status !== asset.status) return null;
-          if (where.owner_provider_profile_id && where.owner_provider_profile_id !== asset.owner_provider_profile_id) return null;
-
-          if (where.media_rights?.some) {
-            const now = new Date();
-            const validRight = asset.media_rights.find((r: any) => {
-              if (r.status !== "ACTIVE") return false;
-              if (r.effective_from > now) return false;
-              if (r.effective_to && r.effective_to <= now) return false;
-              return true;
-            });
-            if (!validRight) return null;
+          const mediaId = where.source_media_asset_id;
+          if (mediaId === safeActiveAsset.id) {
+            return {
+              id: safeDerivative.id,
+              source_media_asset_id: safeActiveAsset.id,
+              storage_locator: safeDerivative.storage_locator,
+              content_type: safeDerivative.content_type
+            };
           }
-
-          if (where.media_links?.some) {
-            const now = new Date();
-            const validLink = asset.media_links.find((l: any) => {
-              if (l.link_status !== "ACTIVE") return false;
-              if (l.link_role !== "PUBLIC_LISTING") return false;
-              if (l.effective_from > now) return false;
-              if (l.effective_to && l.effective_to <= now) return false;
-              return true;
-            });
-            if (!validLink) return null;
-          }
-
-          return asset;
+          return null;
+        }
+      },
+      media_assets: {
+        async findFirst() {
+          throw new Error("CRITICAL SAFETY VIOLATION: media_assets.findFirst was called on fallback!");
         }
       }
     };
@@ -204,6 +207,8 @@ describe("B4 — Media Delivery Contract APIs", () => {
     assert.equal(body.data.file_name, undefined);
     assert.equal(body.data.file_size_bytes, undefined);
     assert.equal(body.data.checksum_sha256, undefined);
+    assert.equal(body.data.storage_path, undefined);
+    assert.equal(body.data.storage_locator, undefined);
     assert.equal(typeof body.data.delivery_url, "string");
     assert.equal(typeof body.data.expires_at, "string");
     assert.equal(body.meta.request_id !== undefined, true);
@@ -314,7 +319,7 @@ describe("B4 — Media Delivery Contract APIs", () => {
     }
   });
 
-  it("10. no storage secret/path leakage in DTO or headers", async () => {
+  it("10. no storage secret/path/locator leakage in DTO or headers", async () => {
     const response = await app.inject({
       method: "GET",
       url: `/api/v1/public/media/${safeActiveAsset.id}/delivery`,
@@ -325,6 +330,7 @@ describe("B4 — Media Delivery Contract APIs", () => {
     const bodyStr = response.payload;
     assert.equal(bodyStr.includes("private/storage/internal"), false);
     assert.equal(bodyStr.includes("hero_banner_secret"), false);
+    assert.equal(bodyStr.includes("canonical/derivatives"), false);
     assert.equal(bodyStr.includes("test_secret_for_b4_acceptance_key"), false);
   });
 
@@ -362,15 +368,13 @@ describe("B4 — Media Delivery Contract APIs", () => {
   });
 
   it("13. authenticated RLS / provider context isolation returns 404 for unowned media", async () => {
-    const mockDbWithRls = createMockDb();
     const appRls = buildApp({
       sessionStore,
       channelHostConfig,
-      domainDbClient: mockDbWithRls,
+      domainDbClient: createMockDb(),
       mediaDeliveryAdapter: testDeliveryAdapter
     });
 
-    // Asset owned by Provider 2 requested by Provider 1 session -> 404
     const response = await appRls.inject({
       method: "GET",
       url: `/api/v1/media/${provider2Asset.id}/delivery`,
@@ -381,5 +385,87 @@ describe("B4 — Media Delivery Contract APIs", () => {
     });
 
     assert.equal(response.statusCode, 404);
+  });
+
+  it("14. public DB function error throws internal error and NEVER falls back to media_assets", async () => {
+    const failingDbApp = buildApp({
+      sessionStore,
+      channelHostConfig,
+      domainDbClient: createMockDb(true),
+      mediaDeliveryAdapter: testDeliveryAdapter
+    });
+
+    const response = await failingDbApp.inject({
+      method: "GET",
+      url: `/api/v1/public/media/${safeActiveAsset.id}/delivery`,
+      headers: { host: "vindzam.test" }
+    });
+
+    assert.equal(response.statusCode, 500);
+    const body = response.json();
+    assert.equal(body.code, "INTERNAL_ERROR");
+  });
+
+  it("15. storagePath compatibility field is absent from MediaDeliveryRequest and storage_path is never sent to adapter", async () => {
+    let capturedRequest: MediaDeliveryRequest | null = null;
+    const captureAdapter = {
+      async generateDeliveryUrl(req: MediaDeliveryRequest) {
+        capturedRequest = req;
+        return { deliveryUrl: "https://media.test/captured", expiresAt: new Date().toISOString() };
+      }
+    };
+
+    const captureApp = buildApp({
+      sessionStore,
+      channelHostConfig,
+      domainDbClient: createMockDb(),
+      mediaDeliveryAdapter: captureAdapter
+    });
+
+    const response = await captureApp.inject({
+      method: "GET",
+      url: `/api/v1/public/media/${safeActiveAsset.id}/delivery`,
+      headers: { host: "vindzam.test" }
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.notEqual(capturedRequest, null);
+    assert.equal(capturedRequest!.storageLocator, safeDerivative.storage_locator);
+    assert.equal((capturedRequest as any).storagePath, undefined);
+  });
+
+  it("16. storageLocator is bound in HMAC signature payload and signature changes when storageLocator changes", async () => {
+    const req1: MediaDeliveryRequest = {
+      mediaId: safeActiveAsset.id,
+      storageLocator: "canonical/derivatives/v1.jpg",
+      mimeType: "image/jpeg"
+    };
+
+    const req2: MediaDeliveryRequest = {
+      mediaId: safeActiveAsset.id,
+      storageLocator: "canonical/derivatives/v2_modified.jpg",
+      mimeType: "image/jpeg"
+    };
+
+    const res1 = await testDeliveryAdapter.generateDeliveryUrl(req1);
+    const res2 = await testDeliveryAdapter.generateDeliveryUrl(req2);
+
+    const token1 = new URL(res1.deliveryUrl).searchParams.get("token");
+    const token2 = new URL(res2.deliveryUrl).searchParams.get("token");
+
+    assert.notEqual(token1, token2, "Adapter signature must change when storageLocator changes");
+  });
+
+  it("17. storageLocator and storagePath are NOT serialized in client response JSON", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/v1/public/media/${safeActiveAsset.id}/delivery`,
+      headers: { host: "vindzam.test" }
+    });
+
+    assert.equal(response.statusCode, 200);
+    const body = response.json();
+    assert.equal(Object.prototype.hasOwnProperty.call(body.data, "storage_locator"), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(body.data, "storage_path"), false);
   });
 });
