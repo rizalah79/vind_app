@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { buildProductionApp } from "./server.js";
+import { LocalMediaDeliveryAdapter } from "./media/delivery-adapter.js";
 
 describe("Production Database Composition Tests (Section D)", () => {
   const channelHostEnv = {
@@ -122,5 +123,53 @@ describe("Production Database Composition Tests (Section D)", () => {
 
     assert.equal(sessionClosed, false, "Injected session client must NOT be closed by app.close()");
     assert.equal(domainClosed, false, "Injected domain client must NOT be closed by app.close()");
+  });
+
+  it("LocalMediaDeliveryAdapter fails closed if explicit signing secret or base URL is missing", () => {
+    const origSecret = process.env.MEDIA_DELIVERY_SIGNING_SECRET;
+    const origUrl = process.env.MEDIA_DELIVERY_BASE_URL;
+    delete process.env.MEDIA_DELIVERY_SIGNING_SECRET;
+    delete process.env.MEDIA_DELIVERY_BASE_URL;
+
+    try {
+      assert.throws(
+        () => new LocalMediaDeliveryAdapter(),
+        (err: Error) => err.message.includes("FATAL: Media delivery infrastructure unconfigured")
+      );
+    } finally {
+      if (origSecret) process.env.MEDIA_DELIVERY_SIGNING_SECRET = origSecret;
+      if (origUrl) process.env.MEDIA_DELIVERY_BASE_URL = origUrl;
+    }
+  });
+
+  it("Media delivery route fails closed with 503 DEPENDENCY_UNAVAILABLE if delivery infrastructure is missing", async () => {
+    const origSecret = process.env.MEDIA_DELIVERY_SIGNING_SECRET;
+    const origUrl = process.env.MEDIA_DELIVERY_BASE_URL;
+    delete process.env.MEDIA_DELIVERY_SIGNING_SECRET;
+    delete process.env.MEDIA_DELIVERY_BASE_URL;
+
+    try {
+      const app = await buildProductionApp({
+        env: channelHostEnv,
+        sessionDbClient: mockSessionDbClient,
+        domainDbClient: mockDomainDbClient as any,
+        readinessDependencies: []
+      });
+
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/v1/public/media/00000000-0000-4000-a000-000000000501/delivery",
+        headers: { host: "vindzam.test" }
+      });
+
+      assert.equal(res.statusCode, 503);
+      const body = res.json();
+      assert.equal(body.code, "DEPENDENCY_UNAVAILABLE");
+
+      await app.close();
+    } finally {
+      if (origSecret) process.env.MEDIA_DELIVERY_SIGNING_SECRET = origSecret;
+      if (origUrl) process.env.MEDIA_DELIVERY_BASE_URL = origUrl;
+    }
   });
 });

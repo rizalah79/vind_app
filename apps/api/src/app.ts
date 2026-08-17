@@ -28,6 +28,8 @@ import { type ChannelHostConfig } from "./auth/channel.js";
 import { type DatabaseClient } from "@vind/database";
 import { registerPublicCatalogRoutes } from "./catalog/public-catalog-routes.js";
 import { registerAuthenticatedCatalogRoutes } from "./catalog/authenticated-catalog-routes.js";
+import { registerMediaRoutes } from "./media/media-routes.js";
+import { createLocalMediaDeliveryAdapter, type MediaDeliveryAdapter } from "./media/delivery-adapter.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -40,6 +42,7 @@ export interface BuildAppOptions {
   sessionStore?: SessionStore | undefined;
   channelHostConfig?: ChannelHostConfig | undefined;
   domainDbClient?: DatabaseClient | undefined;
+  mediaDeliveryAdapter?: MediaDeliveryAdapter | undefined;
 }
 
 function getProblemInstance(request: FastifyRequest): string {
@@ -148,6 +151,11 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     throw new Error("Both sessionStore and channelHostConfig must be supplied together to enable auth routes.");
   }
 
+  let mediaDeliveryAdapter = options.mediaDeliveryAdapter;
+  if (!mediaDeliveryAdapter && process.env.MEDIA_DELIVERY_SIGNING_SECRET && process.env.MEDIA_DELIVERY_BASE_URL) {
+    mediaDeliveryAdapter = createLocalMediaDeliveryAdapter();
+  }
+
   if (options.channelHostConfig && options.domainDbClient) {
     registerPublicCatalogRoutes(app, {
       dbClient: options.domainDbClient,
@@ -160,6 +168,12 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
       dbClient: options.domainDbClient,
       sessionStore: options.sessionStore,
       channelHostConfig: options.channelHostConfig
+    });
+    registerMediaRoutes(app, {
+      dbClient: options.domainDbClient,
+      sessionStore: options.sessionStore,
+      channelHostConfig: options.channelHostConfig,
+      mediaDeliveryAdapter
     });
   }
 
