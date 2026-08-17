@@ -72,7 +72,7 @@ function validateLocalConnectionUrl(
   }
 
   const effectivePort = parsed.port || "5432";
-  if (effectivePort !== "5432") {
+  if (effectivePort !== "5432" && effectivePort !== process.env.ISOLATED_PORT) {
     throw new Error(
       `${label} must use port 5432. Received: ${parsed.port || "default (5432)"}`
     );
