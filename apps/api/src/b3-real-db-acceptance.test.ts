@@ -1,5 +1,6 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -172,20 +173,19 @@ describe("F. Real PostgreSQL Acceptance Test Suite — vind_app_runtime (B3)", (
     await isoAdminClient.end();
     await adminClient.end();
 
-    // 2. Apply canonical migrations in order as vind_db_owner
+    // 2. Apply canonical migrations using packages/database/src/migrate.ts
+    const migratorUrl = buildAcceptanceDbUrl(migrationUrlRaw, acceptDbName);
+    execSync("npx tsx packages/database/src/migrate.ts", {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        DATABASE_MIGRATION_URL: migratorUrl
+      },
+      stdio: "inherit"
+    });
+
     const ownerClient = new Client({ connectionString: ownerUrl });
     await ownerClient.connect();
-
-    const migrationsDir = path.join(repoRoot, "packages", "database", "prisma", "migrations");
-    const migrationFolders = fs.readdirSync(migrationsDir).sort();
-
-    for (const folder of migrationFolders) {
-      const sqlPath = path.join(migrationsDir, folder, "migration.sql");
-      if (fs.existsSync(sqlPath)) {
-        const sql = fs.readFileSync(sqlPath, "utf-8");
-        await ownerClient.query(sql);
-      }
-    }
 
     // Enable command execution mode for fixture seeding
     await ownerClient.query("SELECT set_config('vind.command_execution_active', 'on', false);");

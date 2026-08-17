@@ -2,7 +2,8 @@ import crypto from "node:crypto";
 
 export interface MediaDeliveryRequest {
   mediaId: string;
-  storagePath: string;
+  storageLocator?: string;
+  storagePath?: string;
   mimeType: string;
 }
 

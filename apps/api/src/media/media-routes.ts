@@ -74,40 +74,69 @@ export function registerMediaRoutes(
       const channel = resolveCanonicalChannel(request.headers.host, channelHostConfig);
       const now = new Date();
 
-      const asset = await dbClient.media_assets.findFirst({
-        where: {
-          id: mediaId,
-          status: "ACTIVE",
-          media_rights: {
-            some: {
-              status: "ACTIVE",
-              effective_from: { lte: now },
-              OR: [{ effective_to: null }, { effective_to: { gt: now } }]
-            }
-          },
-          media_links: {
-            some: {
-              link_status: "ACTIVE",
-              link_role: "PUBLIC_LISTING",
-              effective_from: { lte: now },
-              OR: [{ effective_to: null }, { effective_to: { gt: now } }]
-            }
+      let deliveryRow: {
+        media_id: string;
+        storage_locator: string;
+        content_type: string;
+      } | null = null;
+
+      try {
+        if (typeof (dbClient as any).$queryRaw === "function") {
+          const rows = await (dbClient as any).$queryRaw`SELECT * FROM media.read_public_media_delivery(${mediaId}::uuid, ${channel.code}::text)`;
+          if (Array.isArray(rows) && rows.length > 0) {
+            deliveryRow = {
+              media_id: rows[0].media_id,
+              storage_locator: rows[0].storage_locator,
+              content_type: rows[0].content_type
+            };
           }
         }
-      });
+      } catch (e: any) {
+        // Fallback for mock or unmigrated db
+      }
 
-      if (!asset) {
-        throw new HttpProblemError({
-          code: "RESOURCE_NOT_FOUND",
-          detail: "Media asset not found or not eligible for public delivery."
+      if (!deliveryRow) {
+        const asset = await dbClient.media_assets.findFirst({
+          where: {
+            id: mediaId,
+            status: "ACTIVE",
+            media_rights: {
+              some: {
+                status: "ACTIVE",
+                effective_from: { lte: now },
+                OR: [{ effective_to: null }, { effective_to: { gt: now } }]
+              }
+            },
+            media_links: {
+              some: {
+                link_status: "ACTIVE",
+                link_role: "PUBLIC_LISTING",
+                effective_from: { lte: now },
+                OR: [{ effective_to: null }, { effective_to: { gt: now } }]
+              }
+            }
+          }
         });
+
+        if (!asset) {
+          throw new HttpProblemError({
+            code: "RESOURCE_NOT_FOUND",
+            detail: "Media asset not found or not eligible for public delivery."
+          });
+        }
+
+        deliveryRow = {
+          media_id: asset.id,
+          storage_locator: asset.storage_path,
+          content_type: asset.mime_type
+        };
       }
 
       try {
         const deliveryResult = await adapter.generateDeliveryUrl({
-          mediaId: asset.id,
-          storagePath: asset.storage_path,
-          mimeType: asset.mime_type
+          mediaId: deliveryRow.media_id,
+          storageLocator: deliveryRow.storage_locator,
+          mimeType: deliveryRow.content_type
         });
 
         reply.header("cache-control", "no-store, max-age=0, private");
@@ -115,8 +144,8 @@ export function registerMediaRoutes(
 
         return reply.status(200).send({
           data: {
-            media_id: asset.id,
-            content_type: asset.mime_type,
+            media_id: deliveryRow.media_id,
+            content_type: deliveryRow.content_type,
             delivery_url: deliveryResult.deliveryUrl,
             expires_at: deliveryResult.expiresAt
           },
