@@ -103,6 +103,12 @@ export function registerMediaRoutes(
       }
 
       const deliveryRow = rows[0];
+      if (!deliveryRow) {
+        throw new HttpProblemError({
+          code: "RESOURCE_NOT_FOUND",
+          detail: "Media asset not found or not eligible for public delivery."
+        });
+      }
 
       try {
         const deliveryResult = await adapter.generateDeliveryUrl({

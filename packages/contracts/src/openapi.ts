@@ -326,6 +326,168 @@ export const openApiDocument = {
           "503": { $ref: "#/components/responses/Problem" }
         }
       }
+    },
+    "/api/v1/public/resources/{resourceId}/availability": {
+      get: {
+        operationId: "getPublicResourceAvailability",
+        tags: ["Public Availability"],
+        summary: "Get public availability and slot windows for resource",
+        parameters: [
+          { name: "resourceId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
+          { name: "start_time", in: "query", required: true, schema: { type: "string", format: "date-time" } },
+          { name: "end_time", in: "query", required: true, schema: { type: "string", format: "date-time" } }
+        ],
+        responses: {
+          "200": {
+            description: "Public resource availability result.",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/PublicAvailabilityEnvelope" } } }
+          },
+          "400": { $ref: "#/components/responses/Problem" },
+          "404": { $ref: "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sahabat/resources/{resourceId}/calendar": {
+      put: {
+        operationId: "configureResourceCalendar",
+        tags: ["Availability Management"],
+        summary: "Configure or update resource calendar settings",
+        security: [{ cookieAuth: [] }],
+        parameters: [
+          { name: "resourceId", in: "path", required: true, schema: { type: "string", format: "uuid" } }
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["timezone"],
+                properties: {
+                  timezone: { type: "string" },
+                  default_status: { enum: ["AVAILABLE", "UNAVAILABLE"] },
+                  slot_duration_minutes: { type: "integer", minimum: 5, maximum: 1440 },
+                  min_advance_notice_hours: { type: "integer", minimum: 0 },
+                  max_advance_notice_days: { type: "integer", minimum: 0 },
+                  buffer_minutes: { type: "integer", minimum: 0 }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          "200": {
+            description: "Resource calendar configured.",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/ResourceCalendarEnvelope" } } }
+          },
+          "400": { $ref: "#/components/responses/Problem" },
+          "401": { $ref: "#/components/responses/Problem" },
+          "403": { $ref: "#/components/responses/Problem" },
+          "404": { $ref: "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sahabat/calendars/{calendarId}/rules": {
+      post: {
+        operationId: "createCalendarRule",
+        tags: ["Availability Management"],
+        summary: "Create recurring availability rule",
+        security: [{ cookieAuth: [] }],
+        parameters: [
+          { name: "calendarId", in: "path", required: true, schema: { type: "string", format: "uuid" } }
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["rule_pattern", "day_of_week", "start_time", "end_time"],
+                properties: {
+                  rule_pattern: { enum: ["AVAILABLE", "UNAVAILABLE"] },
+                  day_of_week: { type: "integer", minimum: 0, maximum: 6 },
+                  start_time: { type: "string" },
+                  end_time: { type: "string" },
+                  effective_from: { type: ["string", "null"] },
+                  effective_to: { type: ["string", "null"] }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          "201": {
+            description: "Calendar rule created.",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/CalendarRuleEnvelope" } } }
+          },
+          "400": { $ref: "#/components/responses/Problem" },
+          "401": { $ref: "#/components/responses/Problem" },
+          "403": { $ref: "#/components/responses/Problem" },
+          "404": { $ref: "#/components/responses/Problem" },
+          "409": { $ref: "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sahabat/calendars/{calendarId}/blocks": {
+      post: {
+        operationId: "createCalendarBlock",
+        tags: ["Availability Management"],
+        summary: "Create manual or operational availability block override",
+        security: [{ cookieAuth: [] }],
+        parameters: [
+          { name: "calendarId", in: "path", required: true, schema: { type: "string", format: "uuid" } }
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["starts_at", "ends_at"],
+                properties: {
+                  starts_at: { type: "string", format: "date-time" },
+                  ends_at: { type: "string", format: "date-time" },
+                  block_status: { enum: ["UNAVAILABLE", "MAINTENANCE", "CUSTOM"] },
+                  title: { type: ["string", "null"] },
+                  private_notes: { type: ["string", "null"] }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          "201": {
+            description: "Calendar block created.",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/CalendarBlockEnvelope" } } }
+          },
+          "400": { $ref: "#/components/responses/Problem" },
+          "401": { $ref: "#/components/responses/Problem" },
+          "403": { $ref: "#/components/responses/Problem" },
+          "404": { $ref: "#/components/responses/Problem" },
+          "409": { $ref: "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sahabat/blocks/{blockId}": {
+      delete: {
+        operationId: "releaseCalendarBlock",
+        tags: ["Availability Management"],
+        summary: "Release (delete) an availability block override",
+        security: [{ cookieAuth: [] }],
+        parameters: [
+          { name: "blockId", in: "path", required: true, schema: { type: "string", format: "uuid" } }
+        ],
+        responses: {
+          "200": {
+            description: "Calendar block released.",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/CalendarBlockReleasedEnvelope" } } }
+          },
+          "400": { $ref: "#/components/responses/Problem" },
+          "401": { $ref: "#/components/responses/Problem" },
+          "403": { $ref: "#/components/responses/Problem" },
+          "404": { $ref: "#/components/responses/Problem" }
+        }
+      }
     }
   },
   components: {
@@ -816,6 +978,134 @@ export const openApiDocument = {
         required: ["data", "meta"],
         properties: {
           data: { $ref: "#/components/schemas/MediaDelivery" },
+          meta: { $ref: "#/components/schemas/ResponseMeta" }
+        },
+        additionalProperties: false
+      },
+      AvailabilitySlot: {
+        type: "object",
+        required: ["starts_at", "ends_at", "is_available"],
+        properties: {
+          starts_at: { type: "string", format: "date-time" },
+          ends_at: { type: "string", format: "date-time" },
+          is_available: { type: "boolean" }
+        },
+        additionalProperties: false
+      },
+      PublicAvailability: {
+        type: "object",
+        required: ["resource_id", "is_available", "status", "mode", "resource_timezone", "slots"],
+        properties: {
+          resource_id: { type: "string", format: "uuid" },
+          is_available: { type: "boolean" },
+          status: { type: "string" },
+          mode: { type: "string" },
+          resource_timezone: { type: "string" },
+          slots: {
+            type: "array",
+            items: { $ref: "#/components/schemas/AvailabilitySlot" }
+          }
+        },
+        additionalProperties: false
+      },
+      PublicAvailabilityEnvelope: {
+        type: "object",
+        required: ["data", "meta"],
+        properties: {
+          data: { $ref: "#/components/schemas/PublicAvailability" },
+          meta: { $ref: "#/components/schemas/ResponseMeta" }
+        },
+        additionalProperties: false
+      },
+      ResourceCalendar: {
+        type: "object",
+        required: ["id", "resource_id", "timezone", "default_status", "slot_duration_minutes", "min_advance_notice_hours", "max_advance_notice_days", "buffer_minutes", "created_at", "updated_at"],
+        properties: {
+          id: { type: "string", format: "uuid" },
+          resource_id: { type: "string", format: "uuid" },
+          timezone: { type: "string" },
+          default_status: { type: "string" },
+          slot_duration_minutes: { type: "integer" },
+          min_advance_notice_hours: { type: "integer" },
+          max_advance_notice_days: { type: "integer" },
+          buffer_minutes: { type: "integer" },
+          created_at: { type: "string" },
+          updated_at: { type: "string" }
+        },
+        additionalProperties: false
+      },
+      ResourceCalendarEnvelope: {
+        type: "object",
+        required: ["data", "meta"],
+        properties: {
+          data: { $ref: "#/components/schemas/ResourceCalendar" },
+          meta: { $ref: "#/components/schemas/ResponseMeta" }
+        },
+        additionalProperties: false
+      },
+      CalendarRule: {
+        type: "object",
+        required: ["id", "calendar_id", "rule_pattern", "day_of_week", "start_time", "end_time", "created_at"],
+        properties: {
+          id: { type: "string", format: "uuid" },
+          calendar_id: { type: "string", format: "uuid" },
+          rule_pattern: { type: "string" },
+          day_of_week: { type: "integer" },
+          start_time: { type: "string" },
+          end_time: { type: "string" },
+          effective_from: { type: ["string", "null"] },
+          effective_to: { type: ["string", "null"] },
+          created_at: { type: "string" }
+        },
+        additionalProperties: false
+      },
+      CalendarRuleEnvelope: {
+        type: "object",
+        required: ["data", "meta"],
+        properties: {
+          data: { $ref: "#/components/schemas/CalendarRule" },
+          meta: { $ref: "#/components/schemas/ResponseMeta" }
+        },
+        additionalProperties: false
+      },
+      CalendarBlock: {
+        type: "object",
+        required: ["id", "calendar_id", "block_status", "starts_at", "ends_at", "created_at"],
+        properties: {
+          id: { type: "string", format: "uuid" },
+          calendar_id: { type: "string", format: "uuid" },
+          block_status: { type: "string" },
+          starts_at: { type: "string" },
+          ends_at: { type: "string" },
+          title: { type: ["string", "null"] },
+          private_notes: { type: ["string", "null"] },
+          created_at: { type: "string" }
+        },
+        additionalProperties: false
+      },
+      CalendarBlockEnvelope: {
+        type: "object",
+        required: ["data", "meta"],
+        properties: {
+          data: { $ref: "#/components/schemas/CalendarBlock" },
+          meta: { $ref: "#/components/schemas/ResponseMeta" }
+        },
+        additionalProperties: false
+      },
+      CalendarBlockReleased: {
+        type: "object",
+        required: ["id", "released"],
+        properties: {
+          id: { type: "string", format: "uuid" },
+          released: { type: "boolean" }
+        },
+        additionalProperties: false
+      },
+      CalendarBlockReleasedEnvelope: {
+        type: "object",
+        required: ["data", "meta"],
+        properties: {
+          data: { $ref: "#/components/schemas/CalendarBlockReleased" },
           meta: { $ref: "#/components/schemas/ResponseMeta" }
         },
         additionalProperties: false
