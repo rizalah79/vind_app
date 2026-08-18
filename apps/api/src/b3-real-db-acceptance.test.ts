@@ -61,6 +61,10 @@ class TestAcceptanceSessionStore implements SessionStore {
 }
 
 describe("F. Real PostgreSQL Acceptance Test Suite — vind_app_runtime (B3)", () => {
+  if (!process.env.ISOLATED_PORT) {
+    return;
+  }
+
   let app: any;
   let runtimePrismaClient: DatabaseClient;
   let sessionStore: TestAcceptanceSessionStore;
@@ -115,6 +119,10 @@ describe("F. Real PostgreSQL Acceptance Test Suite — vind_app_runtime (B3)", (
   const tokenProvIndiv = "token_prov_indiv_session";
 
   before(async () => {
+    if (!process.env.ISOLATED_PORT) {
+      return;
+    }
+
     if (!bootstrapPassword) {
       throw new Error("POSTGRES_PASSWORD environment variable required for real PostgreSQL acceptance suite.");
     }

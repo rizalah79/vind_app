@@ -488,6 +488,222 @@ export const openApiDocument = {
           "404": { $ref: "#/components/responses/Problem" }
         }
       }
+    },
+    "/api/v1/inquiries": {
+      post: {
+        operationId: "submitInquiry",
+        tags: ["Inquiry"],
+        summary: "Submit a new inquiry",
+        security: [{ cookieAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["target_id"],
+                properties: {
+                  target_id: { type: "string", format: "uuid" },
+                  channel_code: { type: "string", enum: ["VINDZAM", "VINDLOKA"] },
+                  consent_receipt_id: { type: "string", format: "uuid" },
+                  idempotency_key: { type: "string" },
+                  requested_start_at: { type: "string", format: "date-time" },
+                  requested_end_at: { type: "string", format: "date-time" },
+                  location_text: { type: "string" },
+                  geo_region_id: { type: "string", format: "uuid" },
+                  quantity: { type: "integer", default: 1 },
+                  consumer_note: { type: "string" },
+                  requirement_payload: { type: "object" },
+                  commercial_ref: { type: "string" }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          "201": { description: "Inquiry created successfully." },
+          "400": { $ref: "#/components/responses/Problem" },
+          "401": { $ref: "#/components/responses/Problem" },
+          "409": { $ref: "#/components/responses/Problem" }
+        }
+      },
+      get: {
+        operationId: "listConsumerInquiries",
+        tags: ["Inquiry"],
+        summary: "List consumer's inquiries",
+        security: [{ cookieAuth: [] }],
+        parameters: [
+          { name: "limit", in: "query", schema: { type: "integer", default: 20 } },
+          { name: "offset", in: "query", schema: { type: "integer", default: 0 } }
+        ],
+        responses: {
+          "200": { description: "Inquiries retrieved successfully." },
+          "401": { $ref: "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/inquiries/{inquiryId}": {
+      get: {
+        operationId: "readConsumerInquiry",
+        tags: ["Inquiry"],
+        summary: "Read consumer inquiry details",
+        security: [{ cookieAuth: [] }],
+        parameters: [
+          { name: "inquiryId", in: "path", required: true, schema: { type: "string", format: "uuid" } }
+        ],
+        responses: {
+          "200": { description: "Inquiry details retrieved." },
+          "401": { $ref: "#/components/responses/Problem" },
+          "404": { $ref: "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/inquiries/{inquiryId}/cancel": {
+      post: {
+        operationId: "cancelInquiry",
+        tags: ["Inquiry"],
+        summary: "Cancel an inquiry",
+        security: [{ cookieAuth: [] }],
+        parameters: [
+          { name: "inquiryId", in: "path", required: true, schema: { type: "string", format: "uuid" } }
+        ],
+        requestBody: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  reason: { type: "string" }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          "200": { description: "Inquiry cancelled." },
+          "401": { $ref: "#/components/responses/Problem" },
+          "403": { $ref: "#/components/responses/Problem" },
+          "404": { $ref: "#/components/responses/Problem" },
+          "409": { $ref: "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sahabat/inquiries": {
+      get: {
+        operationId: "listSahabatInquiries",
+        tags: ["Sahabat Inquiry"],
+        summary: "List Sahabat inquiries",
+        security: [{ cookieAuth: [] }],
+        parameters: [
+          { name: "limit", in: "query", schema: { type: "integer", default: 20 } },
+          { name: "offset", in: "query", schema: { type: "integer", default: 0 } },
+          { name: "provider_profile_id", in: "query", schema: { type: "string", format: "uuid" } }
+        ],
+        responses: {
+          "200": { description: "Sahabat inquiries list retrieved." },
+          "401": { $ref: "#/components/responses/Problem" },
+          "403": { $ref: "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sahabat/inquiries/{inquiryId}": {
+      get: {
+        operationId: "readSahabatInquiry",
+        tags: ["Sahabat Inquiry"],
+        summary: "Read Sahabat inquiry details",
+        security: [{ cookieAuth: [] }],
+        parameters: [
+          { name: "inquiryId", in: "path", required: true, schema: { type: "string", format: "uuid" } }
+        ],
+        responses: {
+          "200": { description: "Sahabat inquiry details retrieved." },
+          "401": { $ref: "#/components/responses/Problem" },
+          "403": { $ref: "#/components/responses/Problem" },
+          "404": { $ref: "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sahabat/inquiries/{inquiryId}/activate": {
+      post: {
+        operationId: "activateInquiry",
+        tags: ["Sahabat Inquiry"],
+        summary: "Activate an inquiry",
+        security: [{ cookieAuth: [] }],
+        parameters: [
+          { name: "inquiryId", in: "path", required: true, schema: { type: "string", format: "uuid" } }
+        ],
+        responses: {
+          "200": { description: "Inquiry activated." },
+          "401": { $ref: "#/components/responses/Problem" },
+          "403": { $ref: "#/components/responses/Problem" },
+          "404": { $ref: "#/components/responses/Problem" },
+          "409": { $ref: "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sahabat/inquiries/{inquiryId}/assign": {
+      post: {
+        operationId: "assignInquiry",
+        tags: ["Sahabat Inquiry"],
+        summary: "Assign inquiry to Sahabat PIC",
+        security: [{ cookieAuth: [] }],
+        parameters: [
+          { name: "inquiryId", in: "path", required: true, schema: { type: "string", format: "uuid" } }
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["assigned_person_id"],
+                properties: {
+                  assigned_person_id: { type: "string", format: "uuid" },
+                  scoped_assignment_id: { type: "string", format: "uuid" },
+                  reason: { type: "string" }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          "200": { description: "Inquiry assigned." },
+          "400": { $ref: "#/components/responses/Problem" },
+          "401": { $ref: "#/components/responses/Problem" },
+          "403": { $ref: "#/components/responses/Problem" },
+          "404": { $ref: "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sahabat/inquiries/{inquiryId}/close": {
+      post: {
+        operationId: "closeInquiry",
+        tags: ["Sahabat Inquiry"],
+        summary: "Close an inquiry",
+        security: [{ cookieAuth: [] }],
+        parameters: [
+          { name: "inquiryId", in: "path", required: true, schema: { type: "string", format: "uuid" } }
+        ],
+        requestBody: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  reason: { type: "string" }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          "200": { description: "Inquiry closed." },
+          "401": { $ref: "#/components/responses/Problem" },
+          "403": { $ref: "#/components/responses/Problem" },
+          "404": { $ref: "#/components/responses/Problem" },
+          "409": { $ref: "#/components/responses/Problem" }
+        }
+      }
     }
   },
   components: {

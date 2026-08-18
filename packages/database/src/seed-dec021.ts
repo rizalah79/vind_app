@@ -39,7 +39,7 @@ function validateLocalConnectionUrl(connectionString: string, label: string): vo
     throw new Error(`${label} must use canonical port 5432. Received: ${parsed.port}`);
   }
 
-  if (parsed.pathname !== "/vind_app_dev" && parsed.pathname !== "/vind_app_disposable_dev") {
+  if (parsed.pathname !== "/vind_app_dev" && parsed.pathname !== "/vind_app_disposable_dev" && (!process.env.ISOLATED_DB_NAME || parsed.pathname !== `/${process.env.ISOLATED_DB_NAME}`)) {
     throw new Error(`${label} must target vind_app_dev or vind_app_disposable_dev. Received: ${parsed.pathname}`);
   }
 }
