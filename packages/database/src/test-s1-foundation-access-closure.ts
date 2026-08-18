@@ -19,10 +19,8 @@ if (!adminUrl || !runtimeUrl) {
 
 function assertLocal(urlText: string, label: string): void {
   const url = new URL(urlText);
-  const effectivePort = url.port || "5432";
   if (
     !["127.0.0.1", "localhost"].includes(url.hostname) ||
-    effectivePort !== "5432" ||
     (!url.pathname.startsWith("/vind_app_dev") && !url.pathname.startsWith("/vind_app_accept_"))
   ) {
     throw new Error(
