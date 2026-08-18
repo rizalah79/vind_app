@@ -16,9 +16,10 @@ dotenv.config({ path: path.join(repoRoot, ".env") });
 const runtimeUrlRaw = process.env.DATABASE_URL;
 const importerUrlRaw = process.env.DATABASE_IMPORT_URL;
 const migrationUrlRaw = process.env.DATABASE_MIGRATION_URL;
-const bootstrapUser = process.env.POSTGRES_USER || "vind_bootstrap";
-const bootstrapPassword = process.env.POSTGRES_PASSWORD;
+const bootstrapUser = process.env.POSTGRES_USER || "postgres";
+const bootstrapPassword = process.env.POSTGRES_PASSWORD || "postgres";
 const dbPort = process.env.POSTGRES_PORT || "5432";
+const targetPort = migrationUrlRaw ? (new URL(migrationUrlRaw).port || dbPort) : dbPort;
 const mainDbName = process.env.POSTGRES_DB || "vind_app_dev";
 
 if (!runtimeUrlRaw || !bootstrapPassword || !importerUrlRaw || !migrationUrlRaw) {
@@ -53,14 +54,14 @@ async function runSessionTestHarness() {
   console.log(`\nCreating isolated temporary acceptance database: ${acceptDbName}...`);
 
   const adminClient = new Client({
-    connectionString: `postgresql://${bootstrapUser}:${bootstrapPassword}@127.0.0.1:${dbPort}/${mainDbName}`
+    connectionString: `postgresql://${bootstrapUser}:${bootstrapPassword}@127.0.0.1:${targetPort}/${mainDbName}`
   });
   await adminClient.connect();
   await adminClient.query(`CREATE DATABASE "${acceptDbName}" OWNER vind_db_owner`);
   await adminClient.end();
 
   // Construct connection URLs for isolated database dynamically without hardcoded passwords
-  const isoBootstrapUrl = `postgresql://${bootstrapUser}:${bootstrapPassword}@127.0.0.1:${dbPort}/${acceptDbName}`;
+  const isoBootstrapUrl = `postgresql://${bootstrapUser}:${bootstrapPassword}@127.0.0.1:${targetPort}/${acceptDbName}`;
 
   const migUrlObj = new URL(migrationUrlRaw!);
   migUrlObj.pathname = `/${acceptDbName}`;
@@ -1235,7 +1236,7 @@ async function runSessionTestHarness() {
     // Drop isolated clean acceptance database
     console.log(`\nDropping isolated acceptance database ${acceptDbName}...`);
     const dropClient = new Client({
-      connectionString: `postgresql://${bootstrapUser}:${bootstrapPassword}@127.0.0.1:${dbPort}/${mainDbName}`
+      connectionString: `postgresql://${bootstrapUser}:${bootstrapPassword}@127.0.0.1:${targetPort}/${mainDbName}`
     });
     await dropClient.connect();
     await dropClient.query(`DROP DATABASE IF EXISTS "${acceptDbName}" WITH (FORCE)`);

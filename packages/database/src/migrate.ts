@@ -26,9 +26,11 @@ const migrationsDirectory = path.join(
   "migrations"
 );
 
-dotenv.config({
-  path: path.join(packageRoot, ".env")
-});
+if (!process.env.DATABASE_MIGRATION_URL) {
+  dotenv.config({
+    path: path.join(packageRoot, ".env")
+  });
+}
 
 const connectionString = process.env.DATABASE_MIGRATION_URL;
 

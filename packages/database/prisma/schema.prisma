@@ -8,7 +8,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  schemas  = ["access", "audit", "catalog", "configuration", "geo", "identity", "integration", "listing", "media", "organization", "party", "privacy", "provider", "security", "staging", "verification"]
+  schemas  = ["access", "availability", "audit", "catalog", "configuration", "geo", "identity", "integration", "listing", "media", "organization", "party", "privacy", "provider", "security", "staging", "verification"]
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
@@ -189,6 +189,7 @@ model retention_classes {
   data_access_logs          data_access_logs[]
   security_events           security_events[]
   verification_evidence     verification_evidence[]
+  resource_calendars        resource_calendars[]
 
   @@schema("privacy")
 }
@@ -801,6 +802,7 @@ model persons {
   consent_receipts                                                         consent_receipts[]
   subject_requests                                                         subject_requests[]
   provider_profiles                                                        provider_profiles[]
+  calendar_blocks                                                          calendar_blocks[]
 
   @@index([data_origin_code], map: "persons_data_origin_idx")
   @@schema("party")
@@ -1039,6 +1041,7 @@ model resources {
   offering_resources  offering_resources[]
   provider_profiles   provider_profiles    @relation(fields: [provider_profile_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   media_links         media_links[]
+  resource_calendars  resource_calendars?
 
   @@schema("catalog")
 }
@@ -1280,4 +1283,63 @@ model verification_evidence {
   verification_cases     verification_cases @relation(fields: [verification_case_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@schema("verification")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model resource_calendars {
+  id                   String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  seed_key             String?            @unique
+  resource_id          String             @unique @db.Uuid
+  timezone             String             @default("Asia/Jakarta")
+  presentation_mode    String             @default("CALENDAR")
+  status               String             @default("ACTIVE")
+  retention_class_code String             @default("OPS")
+  created_at           DateTime           @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at           DateTime           @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  resources            resources          @relation(fields: [resource_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  retention_classes    retention_classes  @relation(fields: [retention_class_code], references: [code], onDelete: NoAction, onUpdate: NoAction)
+  calendar_rules       calendar_rules[]
+  calendar_blocks      calendar_blocks[]
+
+  @@schema("availability")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model calendar_rules {
+  id                 String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  seed_key           String?            @unique
+  calendar_id        String             @db.Uuid
+  day_of_week        Int
+  start_time         DateTime           @db.Time(6)
+  end_time           DateTime           @db.Time(6)
+  effective_from     DateTime?          @db.Timestamptz(6)
+  effective_to       DateTime?          @db.Timestamptz(6)
+  available_capacity Int                @default(1)
+  status             String             @default("ACTIVE")
+  created_at         DateTime           @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at         DateTime           @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  resource_calendars resource_calendars @relation(fields: [calendar_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([calendar_id, day_of_week, status], map: "idx_calendar_rules_calendar_dow")
+  @@schema("availability")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model calendar_blocks {
+  id                   String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  seed_key             String?            @unique
+  calendar_id          String             @db.Uuid
+  starts_at            DateTime           @db.Timestamptz(6)
+  ends_at              DateTime           @db.Timestamptz(6)
+  block_category       String             @default("MAINTENANCE")
+  internal_reason      String?
+  status               String             @default("ACTIVE")
+  created_by_person_id String?            @db.Uuid
+  created_at           DateTime           @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at           DateTime           @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  resource_calendars   resource_calendars @relation(fields: [calendar_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  persons              persons?           @relation(fields: [created_by_person_id], references: [id], onDelete: SetNull, onUpdate: NoAction)
+
+  @@index([calendar_id, starts_at, ends_at, status], map: "idx_calendar_blocks_calendar_range")
+  @@schema("availability")
 }
