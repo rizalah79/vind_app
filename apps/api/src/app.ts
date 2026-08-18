@@ -33,6 +33,9 @@ import { registerAuthenticatedAvailabilityRoutes } from "./availability/authenti
 import { registerMediaRoutes } from "./media/media-routes.js";
 import { createLocalMediaDeliveryAdapter, type MediaDeliveryAdapter } from "./media/delivery-adapter.js";
 
+import { registerConsumerInquiryRoutes } from "./inquiry/consumer-inquiry-routes.js";
+import { registerSahabatInquiryRoutes } from "./inquiry/sahabat-inquiry-routes.js";
+
 declare module "fastify" {
   interface FastifyRequest {
     vindRequestId: string;
@@ -185,6 +188,16 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
       sessionStore: options.sessionStore,
       channelHostConfig: options.channelHostConfig,
       mediaDeliveryAdapter
+    });
+    registerConsumerInquiryRoutes(app, {
+      dbClient: options.domainDbClient,
+      sessionStore: options.sessionStore,
+      channelHostConfig: options.channelHostConfig
+    });
+    registerSahabatInquiryRoutes(app, {
+      dbClient: options.domainDbClient,
+      sessionStore: options.sessionStore,
+      channelHostConfig: options.channelHostConfig
     });
   }
 

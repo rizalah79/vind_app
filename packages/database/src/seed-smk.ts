@@ -78,7 +78,7 @@ function validateLocalConnectionUrl(
     );
   }
 
-  if (parsed.pathname !== "/vind_app_dev") {
+  if (parsed.pathname !== "/vind_app_dev" && (!process.env.ISOLATED_DB_NAME || parsed.pathname !== `/${process.env.ISOLATED_DB_NAME}`)) {
     throw new Error(
       `${label} must target vind_app_dev. ` +
       `Received: ${parsed.pathname}`
@@ -131,7 +131,7 @@ async function assertDatabaseIdentity(
     throw new Error("Database identity query returned no row.");
   }
 
-  if (identity.database_name !== "vind_app_dev") {
+  if (identity.database_name !== "vind_app_dev" && (!process.env.ISOLATED_DB_NAME || identity.database_name !== process.env.ISOLATED_DB_NAME)) {
     throw new Error(
       `Refusing database: ${identity.database_name}`
     );
