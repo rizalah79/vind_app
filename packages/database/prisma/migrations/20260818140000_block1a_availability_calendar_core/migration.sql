@@ -855,3 +855,10 @@ REVOKE ALL ON FUNCTION availability.release_calendar_block(uuid, text) FROM PUBL
 REVOKE ALL ON FUNCTION availability.release_calendar_block(uuid, text) FROM vind_importer;
 GRANT EXECUTE ON FUNCTION availability.release_calendar_block(uuid, text) TO vind_app_runtime;
 ALTER FUNCTION availability.release_calendar_block(uuid, text) SET row_security = on;
+
+-- Schema & Table Grants for Runtime & Readonly roles
+GRANT USAGE ON SCHEMA availability TO vind_app_runtime;
+GRANT USAGE ON SCHEMA availability TO vind_readonly;
+GRANT SELECT ON ALL TABLES IN SCHEMA availability TO vind_readonly;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA availability TO vind_app_runtime;
+

@@ -28,6 +28,8 @@ import { type ChannelHostConfig } from "./auth/channel.js";
 import { type DatabaseClient } from "@vind/database";
 import { registerPublicCatalogRoutes } from "./catalog/public-catalog-routes.js";
 import { registerAuthenticatedCatalogRoutes } from "./catalog/authenticated-catalog-routes.js";
+import { registerPublicAvailabilityRoutes } from "./availability/public-availability-routes.js";
+import { registerAuthenticatedAvailabilityRoutes } from "./availability/authenticated-availability-routes.js";
 import { registerMediaRoutes } from "./media/media-routes.js";
 import { createLocalMediaDeliveryAdapter, type MediaDeliveryAdapter } from "./media/delivery-adapter.js";
 
@@ -161,10 +163,19 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
       dbClient: options.domainDbClient,
       channelHostConfig: options.channelHostConfig
     });
+    registerPublicAvailabilityRoutes(app, {
+      dbClient: options.domainDbClient,
+      channelHostConfig: options.channelHostConfig
+    });
   }
 
   if (options.sessionStore && options.channelHostConfig && options.domainDbClient) {
     registerAuthenticatedCatalogRoutes(app, {
+      dbClient: options.domainDbClient,
+      sessionStore: options.sessionStore,
+      channelHostConfig: options.channelHostConfig
+    });
+    registerAuthenticatedAvailabilityRoutes(app, {
       dbClient: options.domainDbClient,
       sessionStore: options.sessionStore,
       channelHostConfig: options.channelHostConfig
