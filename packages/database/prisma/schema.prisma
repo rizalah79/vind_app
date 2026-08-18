@@ -8,7 +8,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  schemas  = ["access", "availability", "audit", "catalog", "configuration", "geo", "identity", "integration", "listing", "media", "organization", "party", "privacy", "provider", "security", "staging", "verification"]
+  schemas  = ["access", "availability", "audit", "catalog", "configuration", "engagement", "geo", "identity", "integration", "listing", "media", "organization", "party", "privacy", "provider", "security", "staging", "verification"]
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
@@ -1343,3 +1343,88 @@ model calendar_blocks {
   @@index([calendar_id, starts_at, ends_at, status], map: "idx_calendar_blocks_calendar_range")
   @@schema("availability")
 }
+
+model inquiries {
+  id                                String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  public_reference                  String                 @unique @db.VarChar(64)
+  requester_person_id               String                 @db.Uuid
+  target_provider_profile_id        String                 @db.Uuid
+  source_channel                    String                 @db.VarChar(64)
+  source_channel_publication_id     String?                @db.Uuid
+  source_offering_id                String?                @db.Uuid
+  source_resource_id                String?                @db.Uuid
+  commercial_attribution_reference  String?                @db.VarChar(255)
+  status                            String                 @default("NEW") @db.VarChar(32)
+  consent_receipt_id                String?                @db.Uuid
+  created_at                        DateTime               @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at                        DateTime               @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  activated_at                      DateTime?              @db.Timestamptz(6)
+  cancelled_at                      DateTime?              @db.Timestamptz(6)
+  closed_at                         DateTime?              @db.Timestamptz(6)
+  inquiry_requirements              inquiry_requirements[]
+  inquiry_participants              inquiry_participants[]
+  inquiry_assignments               inquiry_assignments[]
+
+  @@index([requester_person_id, status], map: "idx_inquiries_requester")
+  @@index([target_provider_profile_id, status], map: "idx_inquiries_provider")
+  @@index([source_channel_publication_id], map: "idx_inquiries_publication")
+  @@index([public_reference], map: "idx_inquiries_public_ref")
+  @@schema("engagement")
+}
+
+model inquiry_requirements {
+  id                      String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  inquiry_id              String    @db.Uuid
+  requested_start_at      DateTime? @db.Timestamptz(6)
+  requested_end_at        DateTime? @db.Timestamptz(6)
+  requested_location_text String?
+  requested_geo_region_id String?   @db.Uuid
+  quantity                Int?
+  consumer_note           String?
+  requirement_payload     Json      @default("{}")
+  schema_version          String    @default("v1") @db.VarChar(32)
+  offering_snapshot_id    String?   @db.Uuid
+  resource_snapshot_id    String?   @db.Uuid
+  created_at              DateTime  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  inquiries               inquiries @relation(fields: [inquiry_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([inquiry_id], map: "idx_inquiry_req_inquiry")
+  @@schema("engagement")
+}
+
+model inquiry_participants {
+  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  inquiry_id          String    @db.Uuid
+  participant_type    String    @db.VarChar(32)
+  person_id           String?   @db.Uuid
+  provider_profile_id String?   @db.Uuid
+  status              String    @default("ACTIVE") @db.VarChar(32)
+  created_at          DateTime  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at          DateTime  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  inquiries           inquiries @relation(fields: [inquiry_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([person_id, status], map: "idx_inquiry_participants_person")
+  @@index([provider_profile_id, status], map: "idx_inquiry_participants_provider")
+  @@schema("engagement")
+}
+
+model inquiry_assignments {
+  id                             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  inquiry_id                     String    @db.Uuid
+  assigned_scoped_assignment_id  String?   @db.Uuid
+  assigned_person_id             String?   @db.Uuid
+  provider_profile_id            String    @db.Uuid
+  status                         String    @default("ACTIVE") @db.VarChar(32)
+  assigned_at                    DateTime  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  revoked_at                     DateTime? @db.Timestamptz(6)
+  assigned_by_person_id          String?   @db.Uuid
+  assignment_reason              String?
+  created_at                     DateTime  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  updated_at                     DateTime  @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+  inquiries                      inquiries @relation(fields: [inquiry_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([inquiry_id, status], map: "idx_inquiry_assignments_inquiry")
+  @@index([assigned_person_id, status], map: "idx_inquiry_assignments_person")
+  @@schema("engagement")
+}
+
