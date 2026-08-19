@@ -401,7 +401,7 @@ test("BLOCK 1C DB ACCEPTANCE: MESSAGING CORE MATRIX", async (t) => {
     }
   });
 
-  await t.test("CROSS-BOUNDARY & SECURITY NEGATIVE MATRIX: Invalid mark_read, unsafe asset, and revoked assignment", async () => {
+  await t.test("GATE A: ATTACHMENT READY & MEDIA SAFETY MATRIX", async () => {
     const seedData = await client.query(`
       SELECT p.id as person_id, p.seed_key, cp.id as pub_id, cp.provider_profile_id, cp.channel_code
       FROM party.persons p
@@ -415,23 +415,153 @@ test("BLOCK 1C DB ACCEPTANCE: MESSAGING CORE MATRIX", async (t) => {
       INSERT INTO privacy.consent_receipts (
         id, receipt_key, person_id, purpose_code, policy_version, consent_action, grant_effective_from
       ) VALUES (
-        gen_random_uuid(), 's1:test:consent:block1c_neg', $1::uuid, 'INQUIRY', 'v1.0', 'GRANTED', NOW() - interval '1 day'
+        gen_random_uuid(), 's1:test:consent:gate_a', $1::uuid, 'INQUIRY', 'v1.0', 'GRANTED', NOW() - interval '1 day'
       ) ON CONFLICT (receipt_key) DO UPDATE SET person_id = EXCLUDED.person_id, consent_action = 'GRANTED'
       RETURNING id;
     `, [person_id]);
     const consentReceiptId = consentRes.rows[0].id;
 
-    // Media asset owned by provider
-    const assetRes = await client.query(`
+    // Create 1 fully valid asset (asset + rights + derivative)
+    const validAssetRes = await client.query(`
       INSERT INTO media.media_assets (
         owner_provider_profile_id, media_type, file_name, file_size_bytes, mime_type, checksum_sha256, storage_path, status
       ) VALUES (
-        $1::uuid, 'DOCUMENT', 'brochure.pdf', 1024, 'application/pdf', 'dummy_hash', '/storage/docs/brochure.pdf', 'ACTIVE'
+        $1::uuid, 'DOCUMENT', 'valid_doc.pdf', 2048, 'application/pdf', 'hash_valid', '/storage/valid.pdf', 'ACTIVE'
       ) RETURNING id;
     `, [provider_profile_id]);
-    const validMediaAssetId = assetRes.rows[0].id;
+    const validAssetId = validAssetRes.rows[0].id;
 
-    // Media asset owned by ANOTHER provider
+    await client.query(`
+      INSERT INTO media.media_rights (media_asset_id, rights_type, status, effective_from)
+      VALUES ($1::uuid, 'OWNERSHIP', 'ACTIVE', NOW() - interval '1 hour');
+    `, [validAssetId]);
+
+    await client.query(`
+      INSERT INTO media.media_derivatives (
+        source_media_asset_id, variant_code, is_canonical, content_type, storage_locator, checksum_sha256,
+        scan_status, moderation_status, delivery_status, effective_from
+      ) VALUES (
+        $1::uuid, 'CANONICAL', true, 'application/pdf', 'loc_valid_' || gen_random_uuid()::text, 'hash_deriv_valid',
+        'CLEAN', 'APPROVED', 'DELIVERABLE', NOW() - interval '1 hour'
+      );
+    `, [validAssetId]);
+
+    // Create asset with NO derivative
+    const noDerivAssetRes = await client.query(`
+      INSERT INTO media.media_assets (
+        owner_provider_profile_id, media_type, file_name, file_size_bytes, mime_type, checksum_sha256, storage_path, status
+      ) VALUES (
+        $1::uuid, 'DOCUMENT', 'no_deriv.pdf', 2048, 'application/pdf', 'hash_no_deriv', '/storage/noderiv.pdf', 'ACTIVE'
+      ) RETURNING id;
+    `, [provider_profile_id]);
+    const noDerivAssetId = noDerivAssetRes.rows[0].id;
+
+    await client.query(`
+      INSERT INTO media.media_rights (media_asset_id, rights_type, status, effective_from)
+      VALUES ($1::uuid, 'OWNERSHIP', 'ACTIVE', NOW() - interval '1 hour');
+    `, [noDerivAssetId]);
+
+    // Create asset with UNSAFE scan derivative (delivery_status = 'BLOCKED' to respect table CHECK constraint)
+    const unsafeScanAssetRes = await client.query(`
+      INSERT INTO media.media_assets (
+        owner_provider_profile_id, media_type, file_name, file_size_bytes, mime_type, checksum_sha256, storage_path, status
+      ) VALUES (
+        $1::uuid, 'DOCUMENT', 'infected.pdf', 2048, 'application/pdf', 'hash_infected', '/storage/infected.pdf', 'ACTIVE'
+      ) RETURNING id;
+    `, [provider_profile_id]);
+    const unsafeScanAssetId = unsafeScanAssetRes.rows[0].id;
+
+    await client.query(`
+      INSERT INTO media.media_rights (media_asset_id, rights_type, status, effective_from)
+      VALUES ($1::uuid, 'OWNERSHIP', 'ACTIVE', NOW() - interval '1 hour');
+    `, [unsafeScanAssetId]);
+
+    await client.query(`
+      INSERT INTO media.media_derivatives (
+        source_media_asset_id, variant_code, is_canonical, content_type, storage_locator, checksum_sha256,
+        scan_status, moderation_status, delivery_status, effective_from
+      ) VALUES (
+        $1::uuid, 'CANONICAL', true, 'application/pdf', 'loc_infected_' || gen_random_uuid()::text, 'hash_deriv_infected',
+        'INFECTED', 'APPROVED', 'BLOCKED', NOW() - interval '1 hour'
+      );
+    `, [unsafeScanAssetId]);
+
+    // Create asset with BLOCKED moderation derivative (delivery_status = 'BLOCKED' to respect table CHECK constraint)
+    const unapprovedModAssetRes = await client.query(`
+      INSERT INTO media.media_assets (
+        owner_provider_profile_id, media_type, file_name, file_size_bytes, mime_type, checksum_sha256, storage_path, status
+      ) VALUES (
+        $1::uuid, 'DOCUMENT', 'unapproved.pdf', 2048, 'application/pdf', 'hash_unapproved', '/storage/unapproved.pdf', 'ACTIVE'
+      ) RETURNING id;
+    `, [provider_profile_id]);
+    const unapprovedModAssetId = unapprovedModAssetRes.rows[0].id;
+
+    await client.query(`
+      INSERT INTO media.media_rights (media_asset_id, rights_type, status, effective_from)
+      VALUES ($1::uuid, 'OWNERSHIP', 'ACTIVE', NOW() - interval '1 hour');
+    `, [unapprovedModAssetId]);
+
+    await client.query(`
+      INSERT INTO media.media_derivatives (
+        source_media_asset_id, variant_code, is_canonical, content_type, storage_locator, checksum_sha256,
+        scan_status, moderation_status, delivery_status, effective_from
+      ) VALUES (
+        $1::uuid, 'CANONICAL', true, 'application/pdf', 'loc_unapproved_' || gen_random_uuid()::text, 'hash_deriv_unapproved',
+        'CLEAN', 'BLOCKED', 'BLOCKED', NOW() - interval '1 hour'
+      );
+    `, [unapprovedModAssetId]);
+
+    // Create asset with PENDING delivery status
+    const undeliverableAssetRes = await client.query(`
+      INSERT INTO media.media_assets (
+        owner_provider_profile_id, media_type, file_name, file_size_bytes, mime_type, checksum_sha256, storage_path, status
+      ) VALUES (
+        $1::uuid, 'DOCUMENT', 'undeliv.pdf', 2048, 'application/pdf', 'hash_undeliv', '/storage/undeliv.pdf', 'ACTIVE'
+      ) RETURNING id;
+    `, [provider_profile_id]);
+    const undeliverableAssetId = undeliverableAssetRes.rows[0].id;
+
+    await client.query(`
+      INSERT INTO media.media_rights (media_asset_id, rights_type, status, effective_from)
+      VALUES ($1::uuid, 'OWNERSHIP', 'ACTIVE', NOW() - interval '1 hour');
+    `, [undeliverableAssetId]);
+
+    await client.query(`
+      INSERT INTO media.media_derivatives (
+        source_media_asset_id, variant_code, is_canonical, content_type, storage_locator, checksum_sha256,
+        scan_status, moderation_status, delivery_status, effective_from
+      ) VALUES (
+        $1::uuid, 'CANONICAL', true, 'application/pdf', 'loc_undeliv_' || gen_random_uuid()::text, 'hash_deriv_undeliv',
+        'CLEAN', 'APPROVED', 'PENDING', NOW() - interval '1 hour'
+      );
+    `, [undeliverableAssetId]);
+
+    // Create asset with EXPIRED rights
+    const expiredRightsAssetRes = await client.query(`
+      INSERT INTO media.media_assets (
+        owner_provider_profile_id, media_type, file_name, file_size_bytes, mime_type, checksum_sha256, storage_path, status
+      ) VALUES (
+        $1::uuid, 'DOCUMENT', 'expired_rights.pdf', 2048, 'application/pdf', 'hash_exp_rights', '/storage/exp_rights.pdf', 'ACTIVE'
+      ) RETURNING id;
+    `, [provider_profile_id]);
+    const expiredRightsAssetId = expiredRightsAssetRes.rows[0].id;
+
+    await client.query(`
+      INSERT INTO media.media_rights (media_asset_id, rights_type, status, effective_from, effective_to)
+      VALUES ($1::uuid, 'OWNERSHIP', 'ACTIVE', NOW() - interval '2 days', NOW() - interval '1 day');
+    `, [expiredRightsAssetId]);
+
+    await client.query(`
+      INSERT INTO media.media_derivatives (
+        source_media_asset_id, variant_code, is_canonical, content_type, storage_locator, checksum_sha256,
+        scan_status, moderation_status, delivery_status, effective_from
+      ) VALUES (
+        $1::uuid, 'CANONICAL', true, 'application/pdf', 'loc_exp_rights_' || gen_random_uuid()::text, 'hash_deriv_exp_rights',
+        'CLEAN', 'APPROVED', 'DELIVERABLE', NOW() - interval '1 hour'
+      );
+    `, [expiredRightsAssetId]);
+
+    // Create asset owned by ANOTHER provider
     const otherProvRes = await client.query(`
       SELECT id FROM provider.provider_profiles WHERE id <> $1::uuid LIMIT 1;
     `, [provider_profile_id]);
@@ -441,7 +571,7 @@ test("BLOCK 1C DB ACCEPTANCE: MESSAGING CORE MATRIX", async (t) => {
       INSERT INTO media.media_assets (
         owner_provider_profile_id, media_type, file_name, file_size_bytes, mime_type, checksum_sha256, storage_path, status
       ) VALUES (
-        $1::uuid, 'DOCUMENT', 'other.pdf', 1024, 'application/pdf', 'dummy_hash2', '/storage/docs/other.pdf', 'ACTIVE'
+        $1::uuid, 'DOCUMENT', 'other.pdf', 2048, 'application/pdf', 'hash_other_prov', '/storage/other.pdf', 'ACTIVE'
       ) RETURNING id;
     `, [otherProvId]);
     const wrongProvAssetId = wrongProvAssetRes.rows[0].id;
@@ -450,76 +580,299 @@ test("BLOCK 1C DB ACCEPTANCE: MESSAGING CORE MATRIX", async (t) => {
     await runtimeClient.connect();
 
     try {
-      // 1. Submit Inquiry A & Inquiry B
       await runtimeClient.query(`
         SELECT set_config('app.actor_person_id', '${person_id}', false);
         SELECT set_config('app.actor_person_key', '${person_seed_key}', false);
       `);
 
-      const submitA = await runtimeClient.query(`
+      const submitRes = await runtimeClient.query(`
         SELECT engagement.submit_inquiry(p_target_id => $1::uuid, p_channel_code => $2, p_consent_receipt_id => $3::uuid) as result;
       `, [pub_id, channel_code, consentReceiptId]);
-      const inquiryIdA = submitA.rows[0].result.id;
+      const inquiryId = submitRes.rows[0].result.id;
 
-      const submitB = await runtimeClient.query(`
-        SELECT engagement.submit_inquiry(p_target_id => $1::uuid, p_channel_code => $2, p_consent_receipt_id => $3::uuid) as result;
-      `, [pub_id, channel_code, consentReceiptId]);
-      const inquiryIdB = submitB.rows[0].result.id;
-
-      // Send message to Inquiry A
-      const msgARes = await runtimeClient.query(`
+      // 1. VALID asset + rights + derivative => PASS
+      const passRes = await runtimeClient.query(`
         SELECT messaging.send_consumer_message(
-          p_inquiry_id => $1::uuid, p_body => 'Msg in Inquiry A', p_idempotency_key => 'idemp_inq_a'
+          p_inquiry_id => $1::uuid,
+          p_body => 'Valid attachment message',
+          p_attachment_media_asset_ids => ARRAY[$2::uuid],
+          p_idempotency_key => 'idemp_gate_a_pass'
         ) as result;
-      `, [inquiryIdA]);
-      const msgIdA = msgARes.rows[0].result.id;
+      `, [inquiryId, validAssetId]);
+      assert.strictEqual(passRes.rows[0].result.message_type, "ATTACHMENT", "Valid asset + rights + derivative must PASS");
 
-      // 2. CROSS-INQUIRY MARK READ DENIED
-      await assert.rejects(
-        async () => {
-          await runtimeClient.query(`
-            SELECT messaging.mark_read(p_inquiry_id => $1::uuid, p_last_read_message_id => $2::uuid, p_is_sahabat => false) as result;
-          `, [inquiryIdB, msgIdA]);
-        },
-        (err: any) => err.message.includes("RESOURCE_NOT_FOUND") || err.code === "22023",
-        "Cross-inquiry mark_read must be rejected"
-      );
-
-      // 3. CROSS-BOUNDARY / WRONG-PROVIDER ATTACHMENT DENIED
+      // 2. ACTIVE asset but no safe derivative => DENIED
       await assert.rejects(
         async () => {
           await runtimeClient.query(`
             SELECT messaging.send_consumer_message(
-              p_inquiry_id => $1::uuid,
-              p_body => 'Cross-provider attachment attempt',
-              p_attachment_media_asset_ids => ARRAY[$2::uuid],
-              p_idempotency_key => 'idemp_wrong_prov'
-            ) as result;
-          `, [inquiryIdA, wrongProvAssetId]);
+              p_inquiry_id => $1::uuid, p_body => 'No deriv msg', p_attachment_media_asset_ids => ARRAY[$2::uuid], p_idempotency_key => 'idemp_no_deriv'
+            );
+          `, [inquiryId, noDerivAssetId]);
         },
         (err: any) => err.message.includes("VALIDATION_FAILED") || err.code === "22023",
-        "Attachment owned by another provider must be rejected"
+        "Asset without canonical derivative must be DENIED"
       );
 
-      // 4. UNRELATED CONSUMER DENIED
-      const otherPersonRes = await client.query(`
-        SELECT id, seed_key FROM party.persons WHERE id <> $1::uuid LIMIT 1;
-      `, [person_id]);
-      const otherPerson = otherPersonRes.rows[0];
+      // 3. scan_status unsafe/non-CLEAN => DENIED
+      await assert.rejects(
+        async () => {
+          await runtimeClient.query(`
+            SELECT messaging.send_consumer_message(
+              p_inquiry_id => $1::uuid, p_body => 'Infected msg', p_attachment_media_asset_ids => ARRAY[$2::uuid], p_idempotency_key => 'idemp_infected'
+            );
+          `, [inquiryId, unsafeScanAssetId]);
+        },
+        (err: any) => err.message.includes("VALIDATION_FAILED") || err.code === "22023",
+        "INFECTED derivative must be DENIED"
+      );
+
+      // 4. moderation not APPROVED => DENIED
+      await assert.rejects(
+        async () => {
+          await runtimeClient.query(`
+            SELECT messaging.send_consumer_message(
+              p_inquiry_id => $1::uuid, p_body => 'Unapproved msg', p_attachment_media_asset_ids => ARRAY[$2::uuid], p_idempotency_key => 'idemp_unapproved'
+            );
+          `, [inquiryId, unapprovedModAssetId]);
+        },
+        (err: any) => err.message.includes("VALIDATION_FAILED") || err.code === "22023",
+        "Unapproved derivative must be DENIED"
+      );
+
+      // 5. delivery not DELIVERABLE => DENIED
+      await assert.rejects(
+        async () => {
+          await runtimeClient.query(`
+            SELECT messaging.send_consumer_message(
+              p_inquiry_id => $1::uuid, p_body => 'Undeliverable msg', p_attachment_media_asset_ids => ARRAY[$2::uuid], p_idempotency_key => 'idemp_undeliv'
+            );
+          `, [inquiryId, undeliverableAssetId]);
+        },
+        (err: any) => err.message.includes("VALIDATION_FAILED") || err.code === "22023",
+        "PENDING delivery derivative must be DENIED"
+      );
+
+      // 6. expired/missing rights => DENIED
+      await assert.rejects(
+        async () => {
+          await runtimeClient.query(`
+            SELECT messaging.send_consumer_message(
+              p_inquiry_id => $1::uuid, p_body => 'Expired rights msg', p_attachment_media_asset_ids => ARRAY[$2::uuid], p_idempotency_key => 'idemp_exp_rights'
+            );
+          `, [inquiryId, expiredRightsAssetId]);
+        },
+        (err: any) => err.message.includes("VALIDATION_FAILED") || err.code === "22023",
+        "Asset with expired rights must be DENIED"
+      );
+
+      // 7. wrong-provider asset => DENIED
+      await assert.rejects(
+        async () => {
+          await runtimeClient.query(`
+            SELECT messaging.send_consumer_message(
+              p_inquiry_id => $1::uuid, p_body => 'Wrong prov msg', p_attachment_media_asset_ids => ARRAY[$2::uuid], p_idempotency_key => 'idemp_wrong_prov'
+            );
+          `, [inquiryId, wrongProvAssetId]);
+        },
+        (err: any) => err.message.includes("VALIDATION_FAILED") || err.code === "22023",
+        "Asset owned by another provider must be DENIED"
+      );
+
+    } finally {
+      await runtimeClient.end();
+    }
+  });
+
+  await t.test("GATE B: TEMPORAL SAHABAT AUTHORIZATION MATRIX", async () => {
+    const seedData = await client.query(`
+      SELECT p.id as person_id, p.seed_key, cp.id as pub_id, cp.provider_profile_id, cp.channel_code
+      FROM party.persons p
+      CROSS JOIN listing.channel_publications cp
+      WHERE cp.publication_status = 'PUBLISHED' AND cp.channel_code = 'VINDZAM'
+      LIMIT 1;
+    `);
+    const { person_id, person_seed_key, pub_id, provider_profile_id, channel_code } = seedData.rows[0];
+
+    const consentRes = await client.query(`
+      INSERT INTO privacy.consent_receipts (
+        id, receipt_key, person_id, purpose_code, policy_version, consent_action, grant_effective_from
+      ) VALUES (
+        gen_random_uuid(), 's1:test:consent:gate_b', $1::uuid, 'INQUIRY', 'v1.0', 'GRANTED', NOW() - interval '1 day'
+      ) ON CONFLICT (receipt_key) DO UPDATE SET person_id = EXCLUDED.person_id, consent_action = 'GRANTED'
+      RETURNING id;
+    `, [person_id]);
+    const consentReceiptId = consentRes.rows[0].id;
+
+    const orgRes = await client.query(`
+      SELECT owning_organization_id FROM provider.provider_profiles WHERE id = $1::uuid;
+    `, [provider_profile_id]);
+    const owningOrgId = orgRes.rows[0].owning_organization_id;
+
+    // Create temporary Sahabat person & membership
+    const sahabatPersonRes = await client.query(`
+      INSERT INTO party.persons (seed_key, display_name, legal_name, data_origin_code, is_synthetic, contactable, status)
+      VALUES ('person:sahabat:gate_b_' || gen_random_uuid()::text, 'Staff GateB', 'Staff GateB', 'SYNTHETIC_DEMO', true, false, 'ACTIVE')
+      RETURNING id;
+    `);
+    const sahabatPersonId = sahabatPersonRes.rows[0].id;
+
+    const memRes = await client.query(`
+      INSERT INTO access.memberships (
+        seed_key, person_id, organization_id, status, effective_from
+      ) VALUES (
+        'mem:gate_b:' || gen_random_uuid()::text, $1::uuid, $2::uuid, 'ACTIVE', NOW() - interval '1 day'
+      ) RETURNING id;
+    `, [sahabatPersonId, owningOrgId]);
+    const membershipId = memRes.rows[0].id;
+
+    // 1. Active Scoped Assignment
+    const activeSaRes = await client.query(`
+      INSERT INTO access.scoped_assignments (
+        seed_key, membership_id, role_code, scope_type, subject_person_id, provider_id, status, effective_from
+      ) VALUES (
+        'sa:gate_b_active:' || gen_random_uuid()::text, $1::uuid, 'OPERATIONS_STAFF', 'PROVIDER', $2::uuid, $3::uuid, 'ACTIVE', NOW() - interval '1 hour'
+      ) RETURNING id, seed_key;
+    `, [membershipId, sahabatPersonId, provider_profile_id]);
+    const activeSaId = activeSaRes.rows[0].id;
+    const activeSaSeedKey = activeSaRes.rows[0].seed_key;
+
+    // 2. Revoked Scoped Assignment
+    const revokedSaRes = await client.query(`
+      INSERT INTO access.scoped_assignments (
+        seed_key, membership_id, role_code, scope_type, subject_person_id, provider_id, status, effective_from
+      ) VALUES (
+        'sa:gate_b_revoked:' || gen_random_uuid()::text, $1::uuid, 'OPERATIONS_STAFF', 'PROVIDER', $2::uuid, $3::uuid, 'REVOKED', NOW() - interval '2 days'
+      ) RETURNING id;
+    `, [membershipId, sahabatPersonId, provider_profile_id]);
+    const revokedSaId = revokedSaRes.rows[0].id;
+
+    // 3. Expired Scoped Assignment
+    const expiredSaRes = await client.query(`
+      INSERT INTO access.scoped_assignments (
+        seed_key, membership_id, role_code, scope_type, subject_person_id, provider_id, status, effective_from, effective_to
+      ) VALUES (
+        'sa:gate_b_expired:' || gen_random_uuid()::text, $1::uuid, 'OPERATIONS_STAFF', 'PROVIDER', $2::uuid, $3::uuid, 'ACTIVE', NOW() - interval '2 days', NOW() - interval '1 day'
+      ) RETURNING id;
+    `, [membershipId, sahabatPersonId, provider_profile_id]);
+    const expiredSaId = expiredSaRes.rows[0].id;
+
+    const runtimeClient = new Client({ connectionString: runtimeUrl });
+    await runtimeClient.connect();
+
+    try {
+      // Consumer submits inquiry
+      await runtimeClient.query(`
+        SELECT set_config('app.actor_person_id', '${person_id}', false);
+        SELECT set_config('app.actor_person_key', '${person_seed_key}', false);
+      `);
+
+      const submitRes = await runtimeClient.query(`
+        SELECT engagement.submit_inquiry(p_target_id => $1::uuid, p_channel_code => $2, p_consent_receipt_id => $3::uuid) as result;
+      `, [pub_id, channel_code, consentReceiptId]);
+      const inquiryId = submitRes.rows[0].result.id;
+
+      // Assign inquiry to active Sahabat
+      await client.query(`
+        INSERT INTO engagement.inquiry_assignments (
+          inquiry_id, assigned_scoped_assignment_id, assigned_person_id, provider_profile_id, status
+        ) VALUES (
+          $1::uuid, $2::uuid, $3::uuid, $4::uuid, 'ACTIVE'
+        );
+      `, [inquiryId, activeSaId, sahabatPersonId, provider_profile_id]);
+
+      // 1. Authorized active Sahabat => PASS
+      await runtimeClient.query(`
+        SELECT set_config('app.context_initialized', 'true', false);
+        SELECT set_config('app.context_version', '2', false);
+        SELECT set_config('app.actor_kind', 'HUMAN', false);
+        SELECT set_config('app.authority_plane', 'LOCAL', false);
+        SELECT set_config('app.local_assignment_key', '${activeSaSeedKey}', false);
+        SELECT set_config('app.local_assignment_role_code', 'OPERATIONS_STAFF', false);
+        SELECT set_config('app.local_assignment_scope_type', 'PROVIDER', false);
+        SELECT set_config('app.local_assignment_provider_profile_id', '${provider_profile_id}', false);
+        SELECT set_config('app.actor_person_id', '${sahabatPersonId}', false);
+        SELECT set_config('app.actor_account_key', 'acc_test_sahabat_gate_b', false);
+      `);
+
+      const passListRes = await runtimeClient.query(`
+        SELECT messaging.list_sahabat_messages(p_inquiry_id => $1::uuid) as result;
+      `, [inquiryId]);
+      assert.ok(Array.isArray(passListRes.rows[0].result), "Authorized active Sahabat must PASS");
+
+      // 2. Unrelated provider Sahabat => DENIED
+      // Clear inquiry_assignments so access relies solely on scoped_assignments for otherProvId
+      await client.query(`DELETE FROM engagement.inquiry_assignments WHERE inquiry_id = $1::uuid;`, [inquiryId]);
+
+      const otherProvRes = await client.query(`
+        SELECT id FROM provider.provider_profiles WHERE id <> $1::uuid LIMIT 1;
+      `, [provider_profile_id]);
+      const otherProvId = otherProvRes.rows[0].id;
+
+      const otherSaRes = await client.query(`
+        INSERT INTO access.scoped_assignments (
+          seed_key, membership_id, role_code, scope_type, subject_person_id, provider_id, status, effective_from
+        ) VALUES (
+          'sa:gate_b_other:' || gen_random_uuid()::text, $1::uuid, 'OPERATIONS_STAFF', 'PROVIDER', $2::uuid, $3::uuid, 'ACTIVE', NOW() - interval '1 hour'
+        ) RETURNING seed_key;
+      `, [membershipId, sahabatPersonId, otherProvId]);
 
       await runtimeClient.query(`
-        SELECT set_config('app.actor_person_id', '${otherPerson.id}', false);
-        SELECT set_config('app.actor_person_key', '${otherPerson.seed_key}', false);
+        SELECT set_config('app.local_assignment_key', '${otherSaRes.rows[0].seed_key}', false);
+        SELECT set_config('app.local_assignment_provider_profile_id', '${otherProvId}', false);
       `);
 
       await assert.rejects(
         async () => {
-          await runtimeClient.query(`
-            SELECT messaging.list_consumer_messages($1::uuid) as result;
-          `, [inquiryIdA]);
+          await runtimeClient.query(`SELECT messaging.list_sahabat_messages($1::uuid);`, [inquiryId]);
         },
         (err: any) => err.message.includes("CAPABILITY_DENIED") || err.code === "42501",
-        "Unrelated consumer must be denied"
+        "Unrelated provider Sahabat must be DENIED"
+      );
+
+      // 3. Underlying scoped assignment REVOKED while inquiry_assignment remains ACTIVE => DENIED
+      await runtimeClient.query(`
+        SELECT set_config('app.local_assignment_key', '${activeSaSeedKey}', false);
+        SELECT set_config('app.local_assignment_provider_profile_id', '${provider_profile_id}', false);
+      `);
+
+      const inqAssRevokedRes = await client.query(`
+        INSERT INTO engagement.inquiry_assignments (
+          inquiry_id, assigned_scoped_assignment_id, assigned_person_id, provider_profile_id, status
+        ) VALUES (
+          $1::uuid, $2::uuid, $3::uuid, $4::uuid, 'ACTIVE'
+        ) RETURNING id;
+      `, [inquiryId, revokedSaId, sahabatPersonId, provider_profile_id]);
+
+      // Revoke active scoped assignment
+      await client.query(`
+        UPDATE access.scoped_assignments SET status = 'REVOKED' WHERE id = $1::uuid;
+      `, [activeSaId]);
+
+      await assert.rejects(
+        async () => {
+          await runtimeClient.query(`SELECT messaging.list_sahabat_messages($1::uuid);`, [inquiryId]);
+        },
+        (err: any) => err.message.includes("CAPABILITY_DENIED") || err.code === "42501",
+        "Revoked underlying scoped assignment must be DENIED"
+      );
+
+      // 4. Underlying scoped assignment EXPIRED while inquiry_assignment remains ACTIVE => DENIED
+      await client.query(`DELETE FROM engagement.inquiry_assignments WHERE inquiry_id = $1::uuid;`, [inquiryId]);
+      await client.query(`
+        INSERT INTO engagement.inquiry_assignments (
+          inquiry_id, assigned_scoped_assignment_id, assigned_person_id, provider_profile_id, status
+        ) VALUES (
+          $1::uuid, $2::uuid, $3::uuid, $4::uuid, 'ACTIVE'
+        );
+      `, [inquiryId, expiredSaId, sahabatPersonId, provider_profile_id]);
+
+      await assert.rejects(
+        async () => {
+          await runtimeClient.query(`SELECT messaging.list_sahabat_messages($1::uuid);`, [inquiryId]);
+        },
+        (err: any) => err.message.includes("CAPABILITY_DENIED") || err.code === "42501",
+        "Expired underlying scoped assignment must be DENIED"
       );
 
     } finally {

@@ -218,10 +218,40 @@ BEGIN
            OR access.has_local_capability('engagement.inquiry.read', 'ORGANIZATION', NULL, v_org_id, NULL, NULL)
            OR access.has_local_capability('engagement.inquiry.read', 'WORKSPACE', NULL, v_org_id, NULL, NULL)
            OR EXISTS (
-               SELECT 1 FROM engagement.inquiry_assignments a
-               WHERE a.inquiry_id = p_inquiry_id
-                 AND a.assigned_person_id = v_actor_person_id
-                 AND a.status = 'ACTIVE'
+               SELECT 1
+               FROM engagement.inquiry_assignments ia
+               JOIN access.scoped_assignments sa ON (
+                   (ia.assigned_scoped_assignment_id IS NOT NULL AND sa.id = ia.assigned_scoped_assignment_id)
+                   OR
+                   (ia.assigned_scoped_assignment_id IS NULL AND sa.subject_person_id = ia.assigned_person_id)
+               )
+               WHERE ia.inquiry_id = p_inquiry_id
+                 AND ia.assigned_person_id = v_actor_person_id
+                 AND ia.status = 'ACTIVE'
+                 AND sa.subject_person_id = v_actor_person_id
+                 AND sa.status = 'ACTIVE'
+                 AND sa.effective_from <= clock_timestamp()
+                 AND (sa.effective_to IS NULL OR sa.effective_to > clock_timestamp())
+                 AND (
+                     (sa.scope_type = 'PROVIDER' AND sa.provider_id = v_prov_id)
+                     OR (sa.scope_type = 'ORGANIZATION' AND sa.organization_id = v_org_id)
+                     OR (sa.scope_type = 'WORKSPACE' AND EXISTS (
+                         SELECT 1 FROM provider.provider_workspace_links pwl
+                         WHERE pwl.provider_profile_id = v_prov_id
+                           AND pwl.workspace_id = sa.workspace_id
+                           AND (pwl.link_status = 'ACTIVE' OR pwl.link_status = 'PUBLISHED')
+                           AND pwl.effective_from <= clock_timestamp()
+                           AND (pwl.effective_to IS NULL OR pwl.effective_to > clock_timestamp())
+                     ))
+                     OR (sa.scope_type = 'PERSON' AND sa.scope_person_id = v_actor_person_id)
+                 )
+                 AND (sa.membership_id IS NULL OR EXISTS (
+                     SELECT 1 FROM access.memberships m
+                     WHERE m.id = sa.membership_id
+                       AND m.status = 'ACTIVE'
+                       AND m.effective_from <= clock_timestamp()
+                       AND (m.effective_to IS NULL OR m.effective_to > clock_timestamp())
+                 ))
            )
         THEN
             RETURN true;
@@ -556,16 +586,27 @@ BEGIN
         END;
     END IF;
 
-    -- Validate media attachments against Media-owned state (active status & matching provider ownership)
+    -- Validate media attachments against Media-owned state (active status, matching provider, active rights, safe derivative)
     IF p_attachment_media_asset_ids IS NOT NULL AND array_length(p_attachment_media_asset_ids, 1) > 0 THEN
-        SELECT COUNT(*) INTO v_valid_asset_count
-        FROM media.media_assets
-        WHERE id = ANY(p_attachment_media_asset_ids)
-          AND status = 'ACTIVE'
-          AND owner_provider_profile_id = v_target_prov_id;
+        SELECT COUNT(DISTINCT ma.id) INTO v_valid_asset_count
+        FROM media.media_assets ma
+        JOIN media.media_rights mr ON mr.media_asset_id = ma.id
+        JOIN media.media_derivatives md ON md.source_media_asset_id = ma.id
+        WHERE ma.id = ANY(p_attachment_media_asset_ids)
+          AND ma.status = 'ACTIVE'
+          AND ma.owner_provider_profile_id = v_target_prov_id
+          AND mr.status = 'ACTIVE'
+          AND mr.effective_from <= v_at
+          AND (mr.effective_to IS NULL OR mr.effective_to > v_at)
+          AND md.is_canonical = true
+          AND md.scan_status = 'CLEAN'
+          AND md.moderation_status = 'APPROVED'
+          AND md.delivery_status = 'DELIVERABLE'
+          AND md.effective_from <= v_at
+          AND (md.effective_to IS NULL OR md.effective_to > v_at);
 
         IF v_valid_asset_count <> array_length(p_attachment_media_asset_ids, 1) THEN
-            RAISE EXCEPTION 'VALIDATION_FAILED: One or more attachment media assets do not exist, are inactive/unsafe, or belong to another provider.' USING ERRCODE = '22023';
+            RAISE EXCEPTION 'VALIDATION_FAILED: One or more attachment media assets do not exist, are inactive, lack active rights, lack clean/approved/deliverable canonical derivative, or belong to another provider.' USING ERRCODE = '22023';
         END IF;
         v_msg_type := 'ATTACHMENT';
     ELSE
@@ -773,16 +814,27 @@ BEGIN
         END;
     END IF;
 
-    -- Validate media attachments against Media-owned state (active status & matching provider ownership)
+    -- Validate media attachments against Media-owned state (active status, matching provider, active rights, safe derivative)
     IF p_attachment_media_asset_ids IS NOT NULL AND array_length(p_attachment_media_asset_ids, 1) > 0 THEN
-        SELECT COUNT(*) INTO v_valid_asset_count
-        FROM media.media_assets
-        WHERE id = ANY(p_attachment_media_asset_ids)
-          AND status = 'ACTIVE'
-          AND owner_provider_profile_id = v_target_prov_id;
+        SELECT COUNT(DISTINCT ma.id) INTO v_valid_asset_count
+        FROM media.media_assets ma
+        JOIN media.media_rights mr ON mr.media_asset_id = ma.id
+        JOIN media.media_derivatives md ON md.source_media_asset_id = ma.id
+        WHERE ma.id = ANY(p_attachment_media_asset_ids)
+          AND ma.status = 'ACTIVE'
+          AND ma.owner_provider_profile_id = v_target_prov_id
+          AND mr.status = 'ACTIVE'
+          AND mr.effective_from <= v_at
+          AND (mr.effective_to IS NULL OR mr.effective_to > v_at)
+          AND md.is_canonical = true
+          AND md.scan_status = 'CLEAN'
+          AND md.moderation_status = 'APPROVED'
+          AND md.delivery_status = 'DELIVERABLE'
+          AND md.effective_from <= v_at
+          AND (md.effective_to IS NULL OR md.effective_to > v_at);
 
         IF v_valid_asset_count <> array_length(p_attachment_media_asset_ids, 1) THEN
-            RAISE EXCEPTION 'VALIDATION_FAILED: One or more attachment media assets do not exist, are inactive/unsafe, or belong to another provider.' USING ERRCODE = '22023';
+            RAISE EXCEPTION 'VALIDATION_FAILED: One or more attachment media assets do not exist, are inactive, lack active rights, lack clean/approved/deliverable canonical derivative, or belong to another provider.' USING ERRCODE = '22023';
         END IF;
         v_msg_type := 'ATTACHMENT';
     ELSE
