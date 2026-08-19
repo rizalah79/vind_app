@@ -703,6 +703,168 @@ export const openApiDocument = {
           "409": { $ref: "#/components/responses/Problem" }
         }
       }
+    },
+    "/api/v1/inquiries/{inquiryId}/messages": {
+      get: {
+        operationId: "listConsumerMessages",
+        tags: ["Messaging"],
+        summary: "List consumer messages for an inquiry",
+        security: [{ cookieAuth: [] }],
+        parameters: [
+          { name: "inquiryId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
+          { name: "limit", in: "query", schema: { type: "integer", default: 50 } },
+          { name: "before_id", in: "query", schema: { type: "string", format: "uuid" } }
+        ],
+        responses: {
+          "200": { description: "Message list retrieved." },
+          "401": { $ref: "#/components/responses/Problem" },
+          "403": { $ref: "#/components/responses/Problem" },
+          "404": { $ref: "#/components/responses/Problem" }
+        }
+      },
+      post: {
+        operationId: "sendConsumerMessage",
+        tags: ["Messaging"],
+        summary: "Send a message as consumer",
+        security: [{ cookieAuth: [] }],
+        parameters: [
+          { name: "inquiryId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
+          { name: "Idempotency-Key", in: "header", required: false, schema: { type: "string" } }
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["body"],
+                properties: {
+                  body: { type: "string" },
+                  attachment_media_asset_ids: { type: "array", items: { type: "string", format: "uuid" } }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          "201": { description: "Message sent." },
+          "400": { $ref: "#/components/responses/Problem" },
+          "401": { $ref: "#/components/responses/Problem" },
+          "403": { $ref: "#/components/responses/Problem" },
+          "404": { $ref: "#/components/responses/Problem" },
+          "409": { $ref: "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/inquiries/{inquiryId}/messages/read": {
+      post: {
+        operationId: "markConsumerMessageRead",
+        tags: ["Messaging"],
+        summary: "Mark messages read as consumer",
+        security: [{ cookieAuth: [] }],
+        parameters: [
+          { name: "inquiryId", in: "path", required: true, schema: { type: "string", format: "uuid" } }
+        ],
+        requestBody: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  last_read_message_id: { type: "string", format: "uuid" }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          "200": { description: "Message receipt updated." },
+          "401": { $ref: "#/components/responses/Problem" },
+          "403": { $ref: "#/components/responses/Problem" },
+          "404": { $ref: "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sahabat/inquiries/{inquiryId}/messages": {
+      get: {
+        operationId: "listSahabatMessages",
+        tags: ["Sahabat Messaging"],
+        summary: "List Sahabat messages for an inquiry",
+        security: [{ cookieAuth: [] }],
+        parameters: [
+          { name: "inquiryId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
+          { name: "limit", in: "query", schema: { type: "integer", default: 50 } },
+          { name: "before_id", in: "query", schema: { type: "string", format: "uuid" } }
+        ],
+        responses: {
+          "200": { description: "Sahabat message list retrieved." },
+          "401": { $ref: "#/components/responses/Problem" },
+          "403": { $ref: "#/components/responses/Problem" },
+          "404": { $ref: "#/components/responses/Problem" }
+        }
+      },
+      post: {
+        operationId: "sendSahabatMessage",
+        tags: ["Sahabat Messaging"],
+        summary: "Send a message as Sahabat staff",
+        security: [{ cookieAuth: [] }],
+        parameters: [
+          { name: "inquiryId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
+          { name: "Idempotency-Key", in: "header", required: false, schema: { type: "string" } }
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["body"],
+                properties: {
+                  body: { type: "string" },
+                  attachment_media_asset_ids: { type: "array", items: { type: "string", format: "uuid" } }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          "201": { description: "Sahabat message sent." },
+          "400": { $ref: "#/components/responses/Problem" },
+          "401": { $ref: "#/components/responses/Problem" },
+          "403": { $ref: "#/components/responses/Problem" },
+          "404": { $ref: "#/components/responses/Problem" },
+          "409": { $ref: "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/api/v1/sahabat/inquiries/{inquiryId}/messages/read": {
+      post: {
+        operationId: "markSahabatMessageRead",
+        tags: ["Sahabat Messaging"],
+        summary: "Mark messages read as Sahabat staff",
+        security: [{ cookieAuth: [] }],
+        parameters: [
+          { name: "inquiryId", in: "path", required: true, schema: { type: "string", format: "uuid" } }
+        ],
+        requestBody: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  last_read_message_id: { type: "string", format: "uuid" }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          "200": { description: "Sahabat message receipt updated." },
+          "401": { $ref: "#/components/responses/Problem" },
+          "403": { $ref: "#/components/responses/Problem" },
+          "404": { $ref: "#/components/responses/Problem" }
+        }
+      }
     }
   },
   components: {
