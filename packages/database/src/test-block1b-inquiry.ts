@@ -264,5 +264,82 @@ test("BLOCK 1B DB ACCEPTANCE: INQUIRY CORE MATRIX", async (t) => {
     }
   });
 
+  await t.test("NEGATIVE CONSENT PURPOSE: wrong-purpose consent receipt rejected with 22023 / VALIDATION_FAILED", async () => {
+    const seedData = await client.query(`
+      SELECT
+        cp.id as pub_id,
+        cp.provider_profile_id,
+        cp.channel_code,
+        p.id as person_id,
+        p.seed_key as person_seed_key
+      FROM listing.channel_publications cp
+      CROSS JOIN party.persons p
+      WHERE cp.publication_status = 'PUBLISHED'
+      LIMIT 1;
+    `);
+
+    const { person_id, person_seed_key, pub_id, channel_code } = seedData.rows[0];
+
+    // Insert active GRANTED consent receipt with wrong purpose 'PROFILE_PREFERENCE'
+    const wrongPurposeRes = await client.query(`
+      INSERT INTO privacy.consent_receipts (
+        id, receipt_key, person_id, purpose_code, policy_version, consent_action, grant_effective_from
+      ) VALUES (
+        gen_random_uuid(), 's1:test:consent:block1b_db_wrong_purpose', $1::uuid, 'PROFILE_PREFERENCE', 'v1.0', 'GRANTED', NOW() - interval '1 day'
+      ) ON CONFLICT (receipt_key) DO UPDATE SET person_id = EXCLUDED.person_id, consent_action = 'GRANTED'
+      RETURNING id;
+    `, [person_id]);
+    const wrongPurposeReceiptId = wrongPurposeRes.rows[0].id;
+
+    const runtimeClient = new Client({ connectionString: runtimeUrl });
+    await runtimeClient.connect();
+
+    try {
+      await runtimeClient.query(`
+        SELECT set_config('app.actor_person_id', '${person_id}', false);
+        SELECT set_config('app.actor_person_key', '${person_seed_key}', false);
+        SELECT set_config('app.actor_account_key', 'acc_test_consumer', false);
+        SELECT set_config('app.correlation_id', 'corr_block1b_neg_purpose_test', false);
+        SELECT set_config('app.request_id', 'req_block1b_neg_purpose_test', false);
+      `);
+
+      const countBeforeRes = await client.query(`SELECT count(*)::int as count FROM engagement.inquiries;`);
+      const countBefore = countBeforeRes.rows[0].count;
+
+      const idempotencyKey = `idemp_neg_purpose_${Date.now()}`;
+      await assert.rejects(
+        async () => {
+          await runtimeClient.query(`
+            SELECT engagement.submit_inquiry(
+              p_target_id => $1::uuid,
+              p_channel_code => $2,
+              p_consent_receipt_id => $3::uuid,
+              p_idempotency_key => $4,
+              p_requested_start_at => '2026-09-01T10:00:00Z'::timestamptz,
+              p_requested_end_at => '2026-09-02T10:00:00Z'::timestamptz,
+              p_location_text => 'Sanur, Bali',
+              p_geo_region_id => NULL,
+              p_quantity => 2,
+              p_consumer_note => 'Should be rejected due to wrong consent purpose',
+              p_requirement_payload => '{"flexibility": "HIGH"}'::jsonb,
+              p_commercial_ref => 'COMM_REF_WRONG_PURPOSE'
+            ) as result;
+          `, [pub_id, channel_code, wrongPurposeReceiptId, idempotencyKey]);
+        },
+        (err: any) => {
+          assert.strictEqual(err.code, "22023", "SQLSTATE must be 22023");
+          assert.ok(err.message.includes("VALIDATION_FAILED"), "Error message must contain VALIDATION_FAILED");
+          return true;
+        },
+        "Submit inquiry with wrong-purpose consent receipt must fail with 22023 VALIDATION_FAILED"
+      );
+
+      const countAfterRes = await client.query(`SELECT count(*)::int as count FROM engagement.inquiries;`);
+      assert.strictEqual(countAfterRes.rows[0].count, countBefore, "No inquiry row must be created from rejected submission");
+    } finally {
+      await runtimeClient.end();
+    }
+  });
+
   await client.end();
 });
