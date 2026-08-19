@@ -729,7 +729,7 @@ export const openApiDocument = {
         security: [{ cookieAuth: [] }],
         parameters: [
           { name: "inquiryId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
-          { name: "Idempotency-Key", in: "header", required: false, schema: { type: "string" } }
+          { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string" } }
         ],
         requestBody: {
           required: true,
@@ -810,7 +810,7 @@ export const openApiDocument = {
         security: [{ cookieAuth: [] }],
         parameters: [
           { name: "inquiryId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
-          { name: "Idempotency-Key", in: "header", required: false, schema: { type: "string" } }
+          { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string" } }
         ],
         requestBody: {
           required: true,

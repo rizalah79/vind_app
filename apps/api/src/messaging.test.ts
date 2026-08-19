@@ -171,6 +171,24 @@ describe("Stage 1 Block 1C — Messaging Core API Suite", () => {
     assert.strictEqual(body.data[0].id, sampleMessageId);
   });
 
+  it("POST /api/v1/inquiries/:inquiryId/messages without Idempotency-Key header returns 400", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/inquiries/${sampleInquiryId}/messages`,
+      headers: {
+        host: "vindzam.test",
+        cookie: `vind_session=${validConsumerToken}`
+      },
+      payload: {
+        body: "Test body without idempotency header"
+      }
+    });
+
+    assert.strictEqual(res.statusCode, 400);
+    const body = JSON.parse(res.payload);
+    assert.strictEqual(body.code, "VALIDATION_FAILED");
+  });
+
   it("POST /api/v1/inquiries/:inquiryId/messages with empty body returns 400", async () => {
     const res = await app.inject({
       method: "POST",

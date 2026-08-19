@@ -2,28 +2,18 @@
 
 CREATE SCHEMA IF NOT EXISTS messaging;
 
--- Compatibility helper for public.digest using native sha256
-CREATE OR REPLACE FUNCTION public.digest(p_data text, p_algo text)
-RETURNS bytea
-LANGUAGE plpgsql
-IMMUTABLE
-AS $$
-BEGIN
-    IF lower(p_algo) = 'sha256' THEN
-        RETURN sha256(convert_to(p_data, 'UTF8'));
-    END IF;
-    RAISE EXCEPTION 'Unsupported algorithm %', p_algo;
-END;
-$$;
-
 -- 1. messaging.conversations
 CREATE TABLE messaging.conversations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     inquiry_id UUID NOT NULL UNIQUE REFERENCES engagement.inquiries(id) ON DELETE RESTRICT,
     status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
+    abuse_status VARCHAR(32) NOT NULL DEFAULT 'NORMAL',
+    moderation_status VARCHAR(32) NOT NULL DEFAULT 'UNMODERATED',
     created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
-    CONSTRAINT chk_conversation_status CHECK (status IN ('ACTIVE', 'CLOSED', 'ARCHIVED'))
+    CONSTRAINT chk_conversation_status CHECK (status IN ('ACTIVE', 'CLOSED', 'ARCHIVED')),
+    CONSTRAINT chk_conversations_abuse_status CHECK (abuse_status IN ('NORMAL', 'FLAGGED', 'BLOCKED', 'UNDER_REVIEW')),
+    CONSTRAINT chk_conversations_moderation_status CHECK (moderation_status IN ('UNMODERATED', 'PENDING', 'APPROVED', 'REJECTED'))
 );
 
 CREATE INDEX idx_conversations_inquiry ON messaging.conversations(inquiry_id);
@@ -70,6 +60,7 @@ CREATE TABLE messaging.messages (
     CONSTRAINT chk_messages_status CHECK (status IN ('SENT', 'DELIVERED', 'READ'))
 );
 
+CREATE UNIQUE INDEX uq_messages_conversation_sequence ON messaging.messages(conversation_id, sequence_number);
 CREATE INDEX idx_messages_conv_created ON messaging.messages(conversation_id, created_at DESC, id);
 CREATE INDEX idx_messages_conv_seq ON messaging.messages(conversation_id, sequence_number);
 
@@ -110,10 +101,14 @@ CREATE TABLE messaging.message_receipts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     conversation_id UUID NOT NULL REFERENCES messaging.conversations(id) ON DELETE CASCADE,
     last_read_message_id UUID REFERENCES messaging.messages(id) ON DELETE SET NULL,
+    last_delivered_message_id UUID REFERENCES messaging.messages(id) ON DELETE SET NULL,
     reader_person_id UUID NOT NULL REFERENCES party.persons(id),
+    receipt_type VARCHAR(32) NOT NULL DEFAULT 'READ',
     read_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    delivered_at TIMESTAMPTZ,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
-    CONSTRAINT uq_message_receipts_conv_reader UNIQUE (conversation_id, reader_person_id)
+    CONSTRAINT uq_message_receipts_conv_reader UNIQUE (conversation_id, reader_person_id),
+    CONSTRAINT chk_message_receipts_type CHECK (receipt_type IN ('DELIVERED', 'READ'))
 );
 
 CREATE INDEX idx_message_receipts_conv ON messaging.message_receipts(conversation_id, reader_person_id);
@@ -288,7 +283,7 @@ CREATE POLICY runtime_message_receipts_select ON messaging.message_receipts
 
 -- RPC Surface Functions
 
--- 1. RESOLVE CANONICAL CONVERSATION
+-- 1. RESOLVE CANONICAL CONVERSATION (Internal helper, requires authorization check)
 CREATE OR REPLACE FUNCTION messaging.resolve_canonical_conversation(p_inquiry_id UUID)
 RETURNS UUID
 LANGUAGE plpgsql
@@ -300,6 +295,10 @@ DECLARE
     v_req_person_id UUID;
     v_prov_id UUID;
 BEGIN
+    IF NOT (messaging.is_authorized_for_inquiry(p_inquiry_id, false) OR messaging.is_authorized_for_inquiry(p_inquiry_id, true)) THEN
+        RAISE EXCEPTION 'CAPABILITY_DENIED: Actor is not authorized for this inquiry.' USING ERRCODE = '42501';
+    END IF;
+
     SELECT i.requester_person_id, i.target_provider_profile_id
     INTO v_req_person_id, v_prov_id
     FROM engagement.inquiries i
@@ -314,8 +313,8 @@ BEGIN
     WHERE inquiry_id = p_inquiry_id;
 
     IF v_conv_id IS NULL THEN
-        INSERT INTO messaging.conversations (inquiry_id, status)
-        VALUES (p_inquiry_id, 'ACTIVE')
+        INSERT INTO messaging.conversations (inquiry_id, status, abuse_status, moderation_status)
+        VALUES (p_inquiry_id, 'ACTIVE', 'NORMAL', 'UNMODERATED')
         ON CONFLICT (inquiry_id) DO NOTHING
         RETURNING id INTO v_conv_id;
 
@@ -474,12 +473,13 @@ AS $$
 DECLARE
     v_actor_person_id UUID;
     v_inq_status VARCHAR(32);
+    v_target_prov_id UUID;
     v_conv_id UUID;
     v_seq BIGINT;
     v_msg_id UUID;
     v_at TIMESTAMPTZ := clock_timestamp();
     v_asset_id UUID;
-    v_asset_count INT;
+    v_valid_asset_count INT;
     v_payload_hash TEXT;
     v_existing_status VARCHAR(32);
     v_existing_hash TEXT;
@@ -487,12 +487,19 @@ DECLARE
     v_result JSONB;
     v_msg_type VARCHAR(32);
 BEGIN
+    -- Require non-null non-blank Idempotency-Key
+    IF p_idempotency_key IS NULL OR btrim(p_idempotency_key) = '' THEN
+        RAISE EXCEPTION 'VALIDATION_FAILED: Idempotency-Key header is strictly required.' USING ERRCODE = '22023';
+    END IF;
+
     v_actor_person_id := engagement.current_person_id();
     IF v_actor_person_id IS NULL OR NOT messaging.is_authorized_for_inquiry(p_inquiry_id, false) THEN
         RAISE EXCEPTION 'CAPABILITY_DENIED: Consumer is not authorized for this inquiry.' USING ERRCODE = '42501';
     END IF;
 
-    SELECT status INTO v_inq_status FROM engagement.inquiries WHERE id = p_inquiry_id;
+    SELECT status, target_provider_profile_id INTO v_inq_status, v_target_prov_id
+    FROM engagement.inquiries WHERE id = p_inquiry_id;
+
     IF v_inq_status IS NULL THEN
         RAISE EXCEPTION 'RESOURCE_NOT_FOUND: Inquiry % not found.', p_inquiry_id USING ERRCODE = '22023';
     END IF;
@@ -505,33 +512,60 @@ BEGIN
         RAISE EXCEPTION 'VALIDATION_FAILED: Message body cannot be empty.' USING ERRCODE = '22023';
     END IF;
 
-    -- Idempotency validation using native sha256
-    IF p_idempotency_key IS NOT NULL AND btrim(p_idempotency_key) <> '' THEN
-        v_payload_hash := encode(sha256(convert_to('send_consumer_message:' || p_inquiry_id::text || ':' || v_actor_person_id::text || ':' || p_body || ':' || COALESCE(array_to_string(p_attachment_media_asset_ids, ','), ''), 'UTF8')), 'hex');
+    -- Concurrency-safe Idempotency reservation (using native sha256)
+    v_payload_hash := encode(sha256(convert_to('send_consumer_message:' || p_inquiry_id::text || ':' || v_actor_person_id::text || ':' || p_body || ':' || COALESCE(array_to_string(p_attachment_media_asset_ids, ','), ''), 'UTF8')), 'hex');
 
-        SELECT status, request_hash_sha256, response_body
-        INTO v_existing_status, v_existing_hash, v_existing_response
-        FROM integration.idempotency_keys
-        WHERE scope = 'messaging.send_message' AND idempotency_key = p_idempotency_key;
+    SELECT status, request_hash_sha256, response_body
+    INTO v_existing_status, v_existing_hash, v_existing_response
+    FROM integration.idempotency_keys
+    WHERE scope = 'messaging.send_message' AND idempotency_key = p_idempotency_key
+    FOR UPDATE;
 
-        IF v_existing_status IS NOT NULL THEN
-            IF v_existing_hash <> v_payload_hash THEN
-                RAISE EXCEPTION 'STATE_CONFLICT: Idempotency key reused with different payload.' USING ERRCODE = '22023';
-            END IF;
-            IF v_existing_response IS NOT NULL THEN
+    IF v_existing_status IS NOT NULL THEN
+        IF v_existing_status = 'SUCCEEDED' THEN
+            IF v_existing_hash = v_payload_hash THEN
                 RETURN v_existing_response;
+            ELSE
+                RAISE EXCEPTION 'STATE_CONFLICT: Idempotency key reused with different payload.' USING ERRCODE = '23505';
             END IF;
+        ELSE
+            RAISE EXCEPTION 'STATE_CONFLICT: Concurrent request with same idempotency key is processing.' USING ERRCODE = '23505';
         END IF;
+    ELSE
+        BEGIN
+            INSERT INTO integration.idempotency_keys (
+                scope, idempotency_key, request_hash_sha256, actor_key, status, expires_at
+            ) VALUES (
+                'messaging.send_message', p_idempotency_key, v_payload_hash, v_actor_person_id::text, 'PROCESSING', v_at + interval '24 hours'
+            );
+        EXCEPTION WHEN unique_violation THEN
+            -- Wait for concurrent transaction to complete and inspect result
+            SELECT status, request_hash_sha256, response_body
+            INTO v_existing_status, v_existing_hash, v_existing_response
+            FROM integration.idempotency_keys
+            WHERE scope = 'messaging.send_message' AND idempotency_key = p_idempotency_key
+            FOR UPDATE;
+
+            IF v_existing_status = 'SUCCEEDED' AND v_existing_hash = v_payload_hash THEN
+                RETURN v_existing_response;
+            ELSIF v_existing_status = 'SUCCEEDED' AND v_existing_hash <> v_payload_hash THEN
+                RAISE EXCEPTION 'STATE_CONFLICT: Idempotency key reused with different payload.' USING ERRCODE = '23505';
+            ELSE
+                RAISE EXCEPTION 'STATE_CONFLICT: Concurrent request with same idempotency key is processing.' USING ERRCODE = '23505';
+            END IF;
+        END;
     END IF;
 
-    -- Validate media attachments
+    -- Validate media attachments against Media-owned state (active status & matching provider ownership)
     IF p_attachment_media_asset_ids IS NOT NULL AND array_length(p_attachment_media_asset_ids, 1) > 0 THEN
-        SELECT COUNT(*) INTO v_asset_count
+        SELECT COUNT(*) INTO v_valid_asset_count
         FROM media.media_assets
-        WHERE id = ANY(p_attachment_media_asset_ids);
+        WHERE id = ANY(p_attachment_media_asset_ids)
+          AND status = 'ACTIVE'
+          AND owner_provider_profile_id = v_target_prov_id;
 
-        IF v_asset_count <> array_length(p_attachment_media_asset_ids, 1) THEN
-            RAISE EXCEPTION 'VALIDATION_FAILED: One or more media asset IDs do not exist or are invalid.' USING ERRCODE = '22023';
+        IF v_valid_asset_count <> array_length(p_attachment_media_asset_ids, 1) THEN
+            RAISE EXCEPTION 'VALIDATION_FAILED: One or more attachment media assets do not exist, are inactive/unsafe, or belong to another provider.' USING ERRCODE = '22023';
         END IF;
         v_msg_type := 'ATTACHMENT';
     ELSE
@@ -540,7 +574,9 @@ BEGIN
 
     v_conv_id := messaging.resolve_canonical_conversation(p_inquiry_id);
 
-    -- Get next sequence number atomically
+    -- Concurrency-safe Sequence Allocation via deterministic row locking
+    PERFORM 1 FROM messaging.conversations WHERE id = v_conv_id FOR UPDATE;
+
     SELECT COALESCE(MAX(sequence_number), 0) + 1 INTO v_seq
     FROM messaging.messages
     WHERE conversation_id = v_conv_id;
@@ -581,13 +617,11 @@ BEGIN
         ), '[]'::jsonb)
     );
 
-    IF p_idempotency_key IS NOT NULL AND btrim(p_idempotency_key) <> '' THEN
-        INSERT INTO integration.idempotency_keys (
-            scope, idempotency_key, request_hash_sha256, status, response_status_code, response_body, expires_at
-        ) VALUES (
-            'messaging.send_message', p_idempotency_key, v_payload_hash, 'SUCCEEDED', 201, v_result, clock_timestamp() + interval '24 hours'
-        ) ON CONFLICT (scope, idempotency_key) DO UPDATE SET response_body = EXCLUDED.response_body, status = 'SUCCEEDED';
-    END IF;
+    UPDATE integration.idempotency_keys SET
+        status = 'SUCCEEDED',
+        response_status_code = 201,
+        response_body = v_result
+    WHERE scope = 'messaging.send_message' AND idempotency_key = p_idempotency_key;
 
     -- Audit Event (Metadata only — ABSOLUTELY NO MESSAGE BODY)
     INSERT INTO audit.audit_events (
@@ -656,12 +690,13 @@ AS $$
 DECLARE
     v_actor_person_id UUID;
     v_inq_status VARCHAR(32);
+    v_target_prov_id UUID;
     v_conv_id UUID;
     v_seq BIGINT;
     v_msg_id UUID;
     v_at TIMESTAMPTZ := clock_timestamp();
     v_asset_id UUID;
-    v_asset_count INT;
+    v_valid_asset_count INT;
     v_payload_hash TEXT;
     v_existing_status VARCHAR(32);
     v_existing_hash TEXT;
@@ -669,12 +704,19 @@ DECLARE
     v_result JSONB;
     v_msg_type VARCHAR(32);
 BEGIN
+    -- Require non-null non-blank Idempotency-Key
+    IF p_idempotency_key IS NULL OR btrim(p_idempotency_key) = '' THEN
+        RAISE EXCEPTION 'VALIDATION_FAILED: Idempotency-Key header is strictly required.' USING ERRCODE = '22023';
+    END IF;
+
     v_actor_person_id := engagement.current_person_id();
     IF v_actor_person_id IS NULL OR NOT messaging.is_authorized_for_inquiry(p_inquiry_id, true) THEN
         RAISE EXCEPTION 'CAPABILITY_DENIED: Sahabat staff is not authorized for this inquiry.' USING ERRCODE = '42501';
     END IF;
 
-    SELECT status INTO v_inq_status FROM engagement.inquiries WHERE id = p_inquiry_id;
+    SELECT status, target_provider_profile_id INTO v_inq_status, v_target_prov_id
+    FROM engagement.inquiries WHERE id = p_inquiry_id;
+
     IF v_inq_status IS NULL THEN
         RAISE EXCEPTION 'RESOURCE_NOT_FOUND: Inquiry % not found.', p_inquiry_id USING ERRCODE = '22023';
     END IF;
@@ -687,33 +729,60 @@ BEGIN
         RAISE EXCEPTION 'VALIDATION_FAILED: Message body cannot be empty.' USING ERRCODE = '22023';
     END IF;
 
-    -- Idempotency validation using native sha256
-    IF p_idempotency_key IS NOT NULL AND btrim(p_idempotency_key) <> '' THEN
-        v_payload_hash := encode(sha256(convert_to('send_sahabat_message:' || p_inquiry_id::text || ':' || v_actor_person_id::text || ':' || p_body || ':' || COALESCE(array_to_string(p_attachment_media_asset_ids, ','), ''), 'UTF8')), 'hex');
+    -- Concurrency-safe Idempotency reservation (using native sha256)
+    v_payload_hash := encode(sha256(convert_to('send_sahabat_message:' || p_inquiry_id::text || ':' || v_actor_person_id::text || ':' || p_body || ':' || COALESCE(array_to_string(p_attachment_media_asset_ids, ','), ''), 'UTF8')), 'hex');
 
-        SELECT status, request_hash_sha256, response_body
-        INTO v_existing_status, v_existing_hash, v_existing_response
-        FROM integration.idempotency_keys
-        WHERE scope = 'messaging.send_message' AND idempotency_key = p_idempotency_key;
+    SELECT status, request_hash_sha256, response_body
+    INTO v_existing_status, v_existing_hash, v_existing_response
+    FROM integration.idempotency_keys
+    WHERE scope = 'messaging.send_message' AND idempotency_key = p_idempotency_key
+    FOR UPDATE;
 
-        IF v_existing_status IS NOT NULL THEN
-            IF v_existing_hash <> v_payload_hash THEN
-                RAISE EXCEPTION 'STATE_CONFLICT: Idempotency key reused with different payload.' USING ERRCODE = '22023';
-            END IF;
-            IF v_existing_response IS NOT NULL THEN
+    IF v_existing_status IS NOT NULL THEN
+        IF v_existing_status = 'SUCCEEDED' THEN
+            IF v_existing_hash = v_payload_hash THEN
                 RETURN v_existing_response;
+            ELSE
+                RAISE EXCEPTION 'STATE_CONFLICT: Idempotency key reused with different payload.' USING ERRCODE = '23505';
             END IF;
+        ELSE
+            RAISE EXCEPTION 'STATE_CONFLICT: Concurrent request with same idempotency key is processing.' USING ERRCODE = '23505';
         END IF;
+    ELSE
+        BEGIN
+            INSERT INTO integration.idempotency_keys (
+                scope, idempotency_key, request_hash_sha256, actor_key, status, expires_at
+            ) VALUES (
+                'messaging.send_message', p_idempotency_key, v_payload_hash, v_actor_person_id::text, 'PROCESSING', v_at + interval '24 hours'
+            );
+        EXCEPTION WHEN unique_violation THEN
+            -- Wait for concurrent transaction to complete and inspect result
+            SELECT status, request_hash_sha256, response_body
+            INTO v_existing_status, v_existing_hash, v_existing_response
+            FROM integration.idempotency_keys
+            WHERE scope = 'messaging.send_message' AND idempotency_key = p_idempotency_key
+            FOR UPDATE;
+
+            IF v_existing_status = 'SUCCEEDED' AND v_existing_hash = v_payload_hash THEN
+                RETURN v_existing_response;
+            ELSIF v_existing_status = 'SUCCEEDED' AND v_existing_hash <> v_payload_hash THEN
+                RAISE EXCEPTION 'STATE_CONFLICT: Idempotency key reused with different payload.' USING ERRCODE = '23505';
+            ELSE
+                RAISE EXCEPTION 'STATE_CONFLICT: Concurrent request with same idempotency key is processing.' USING ERRCODE = '23505';
+            END IF;
+        END;
     END IF;
 
-    -- Validate media attachments
+    -- Validate media attachments against Media-owned state (active status & matching provider ownership)
     IF p_attachment_media_asset_ids IS NOT NULL AND array_length(p_attachment_media_asset_ids, 1) > 0 THEN
-        SELECT COUNT(*) INTO v_asset_count
+        SELECT COUNT(*) INTO v_valid_asset_count
         FROM media.media_assets
-        WHERE id = ANY(p_attachment_media_asset_ids);
+        WHERE id = ANY(p_attachment_media_asset_ids)
+          AND status = 'ACTIVE'
+          AND owner_provider_profile_id = v_target_prov_id;
 
-        IF v_asset_count <> array_length(p_attachment_media_asset_ids, 1) THEN
-            RAISE EXCEPTION 'VALIDATION_FAILED: One or more media asset IDs do not exist or are invalid.' USING ERRCODE = '22023';
+        IF v_valid_asset_count <> array_length(p_attachment_media_asset_ids, 1) THEN
+            RAISE EXCEPTION 'VALIDATION_FAILED: One or more attachment media assets do not exist, are inactive/unsafe, or belong to another provider.' USING ERRCODE = '22023';
         END IF;
         v_msg_type := 'ATTACHMENT';
     ELSE
@@ -722,7 +791,9 @@ BEGIN
 
     v_conv_id := messaging.resolve_canonical_conversation(p_inquiry_id);
 
-    -- Get next sequence number atomically
+    -- Concurrency-safe Sequence Allocation via deterministic row locking
+    PERFORM 1 FROM messaging.conversations WHERE id = v_conv_id FOR UPDATE;
+
     SELECT COALESCE(MAX(sequence_number), 0) + 1 INTO v_seq
     FROM messaging.messages
     WHERE conversation_id = v_conv_id;
@@ -763,13 +834,11 @@ BEGIN
         ), '[]'::jsonb)
     );
 
-    IF p_idempotency_key IS NOT NULL AND btrim(p_idempotency_key) <> '' THEN
-        INSERT INTO integration.idempotency_keys (
-            scope, idempotency_key, request_hash_sha256, status, response_status_code, response_body, expires_at
-        ) VALUES (
-            'messaging.send_message', p_idempotency_key, v_payload_hash, 'SUCCEEDED', 201, v_result, clock_timestamp() + interval '24 hours'
-        ) ON CONFLICT (scope, idempotency_key) DO UPDATE SET response_body = EXCLUDED.response_body, status = 'SUCCEEDED';
-    END IF;
+    UPDATE integration.idempotency_keys SET
+        status = 'SUCCEEDED',
+        response_status_code = 201,
+        response_body = v_result
+    WHERE scope = 'messaging.send_message' AND idempotency_key = p_idempotency_key;
 
     -- Audit Event (Metadata only — ABSOLUTELY NO MESSAGE BODY)
     INSERT INTO audit.audit_events (
@@ -823,7 +892,7 @@ BEGIN
 END;
 $$;
 
--- 6. MARK READ
+-- 6. MARK READ (Hardened cross-conversation check & monotonic read progression)
 CREATE OR REPLACE FUNCTION messaging.mark_read(
     p_inquiry_id UUID,
     p_last_read_message_id UUID DEFAULT NULL,
@@ -838,6 +907,9 @@ DECLARE
     v_actor_person_id UUID;
     v_conv_id UUID;
     v_target_msg_id UUID := p_last_read_message_id;
+    v_target_seq BIGINT;
+    v_current_seq BIGINT;
+    v_current_msg_id UUID;
     v_at TIMESTAMPTZ := clock_timestamp();
     v_result JSONB;
 BEGIN
@@ -848,22 +920,42 @@ BEGIN
 
     v_conv_id := messaging.resolve_canonical_conversation(p_inquiry_id);
 
-    IF v_target_msg_id IS NULL THEN
-        SELECT id INTO v_target_msg_id
+    IF v_target_msg_id IS NOT NULL THEN
+        -- Verify supplied last_read_message_id belongs strictly to THIS conversation
+        SELECT sequence_number INTO v_target_seq
+        FROM messaging.messages
+        WHERE id = v_target_msg_id AND conversation_id = v_conv_id;
+
+        IF v_target_seq IS NULL THEN
+            RAISE EXCEPTION 'RESOURCE_NOT_FOUND: Message % does not exist in conversation for inquiry %.', v_target_msg_id, p_inquiry_id USING ERRCODE = '22023';
+        END IF;
+    ELSE
+        SELECT id, sequence_number INTO v_target_msg_id, v_target_seq
         FROM messaging.messages
         WHERE conversation_id = v_conv_id
         ORDER BY sequence_number DESC
         LIMIT 1;
     END IF;
 
+    -- Monotonic read check: ensure we do not move read receipt backwards
+    SELECT r.last_read_message_id, m.sequence_number
+    INTO v_current_msg_id, v_current_seq
+    FROM messaging.message_receipts r
+    JOIN messaging.messages m ON m.id = r.last_read_message_id
+    WHERE r.conversation_id = v_conv_id AND r.reader_person_id = v_actor_person_id;
+
+    IF v_current_seq IS NOT NULL AND v_target_seq < v_current_seq THEN
+        v_target_msg_id := v_current_msg_id;
+    END IF;
+
     INSERT INTO messaging.message_receipts (
-        conversation_id, last_read_message_id, reader_person_id, read_at, updated_at
+        conversation_id, last_read_message_id, reader_person_id, receipt_type, read_at, updated_at
     ) VALUES (
-        v_conv_id, v_target_msg_id, v_actor_person_id, v_at, v_at
+        v_conv_id, v_target_msg_id, v_actor_person_id, 'READ', v_at, v_at
     )
     ON CONFLICT (conversation_id, reader_person_id) DO UPDATE SET
         last_read_message_id = COALESCE(EXCLUDED.last_read_message_id, messaging.message_receipts.last_read_message_id),
-        read_at = EXCLUDED.read_at,
+        read_at = CASE WHEN EXCLUDED.last_read_message_id = messaging.message_receipts.last_read_message_id THEN messaging.message_receipts.read_at ELSE EXCLUDED.read_at END,
         updated_at = EXCLUDED.updated_at;
 
     v_result := jsonb_build_object(
@@ -878,8 +970,20 @@ BEGIN
 END;
 $$;
 
--- Schema Grants
+-- Schema Grants & Least Privilege Surface
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA messaging FROM PUBLIC;
+
 GRANT USAGE ON SCHEMA messaging TO vind_db_owner, vind_migrator, vind_app_runtime;
 GRANT ALL ON ALL TABLES IN SCHEMA messaging TO vind_db_owner, vind_migrator;
 GRANT SELECT ON ALL TABLES IN SCHEMA messaging TO vind_app_runtime;
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA messaging TO vind_app_runtime, vind_migrator, vind_db_owner;
+
+-- Explicit RPC Grants for Runtime: Expose ONLY intended API surface
+GRANT EXECUTE ON FUNCTION messaging.list_consumer_messages(UUID, INT, UUID) TO vind_app_runtime;
+GRANT EXECUTE ON FUNCTION messaging.list_sahabat_messages(UUID, INT, UUID) TO vind_app_runtime;
+GRANT EXECUTE ON FUNCTION messaging.send_consumer_message(UUID, TEXT, UUID[], TEXT) TO vind_app_runtime;
+GRANT EXECUTE ON FUNCTION messaging.send_sahabat_message(UUID, TEXT, UUID[], TEXT) TO vind_app_runtime;
+GRANT EXECUTE ON FUNCTION messaging.mark_read(UUID, UUID, BOOLEAN) TO vind_app_runtime;
+
+-- Explicitly revoke runtime execution from internal helpers
+REVOKE EXECUTE ON FUNCTION messaging.resolve_canonical_conversation(UUID) FROM vind_app_runtime;
+REVOKE EXECUTE ON FUNCTION messaging.is_authorized_for_inquiry(UUID, BOOLEAN) FROM vind_app_runtime;

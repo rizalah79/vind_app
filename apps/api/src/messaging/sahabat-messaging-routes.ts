@@ -105,7 +105,13 @@ export function registerSahabatMessagingRoutes(
       const contextParams = await prepareRequestContext(request);
 
       const headerIdempotencyKey = request.headers["idempotency-key"] as string | undefined;
-      const effectiveIdempotencyKey = headerIdempotencyKey || request.body?.idempotency_key || null;
+      if (!headerIdempotencyKey || typeof headerIdempotencyKey !== "string" || headerIdempotencyKey.trim() === "") {
+        throw new HttpProblemError({
+          code: "VALIDATION_FAILED",
+          detail: "Idempotency-Key header is strictly required."
+        });
+      }
+      const effectiveIdempotencyKey = headerIdempotencyKey.trim();
 
       const bodyText = request.body?.body;
       if (!bodyText || typeof bodyText !== "string" || bodyText.trim() === "") {
