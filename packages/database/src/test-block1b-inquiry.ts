@@ -2,8 +2,25 @@ import assert from "node:assert";
 import { test } from "node:test";
 import { Client } from "pg";
 
-const connectionString = process.env.DATABASE_MIGRATION_URL || "postgresql://vind_db_owner:vind_db_owner_pass@localhost:5432/vind_app_dev?schema=public";
-const runtimeUrl = process.env.DATABASE_URL || "postgresql://vind_app_runtime:f1bfce720440462356e611e7b13fbb615204bb9353651b53c361f77f1097f0ad@localhost:5432/vind_app_dev?schema=public";
+const connectionString = process.env.DATABASE_MIGRATION_URL;
+const runtimeUrl = process.env.DATABASE_URL;
+
+if (!connectionString || !runtimeUrl) {
+  throw new Error("DATABASE_MIGRATION_URL and DATABASE_URL environment variables are strictly required for Block 1B DB Acceptance Test.");
+}
+
+function assertIsolatedAcceptanceDb(urlStr: string, label: string) {
+  const parsed = new URL(urlStr);
+  const port = parsed.port || "5432";
+  const dbName = parsed.pathname.replace(/^\//, "");
+
+  if (port === "5432" || dbName === "vind_app_dev") {
+    throw new Error(`SECURITY INCIDENT PREVENTION: ${label} must target an isolated acceptance database on a non-5432 port and non-dev database. Received port=${port}, db=${dbName}`);
+  }
+}
+
+assertIsolatedAcceptanceDb(connectionString, "DATABASE_MIGRATION_URL");
+assertIsolatedAcceptanceDb(runtimeUrl, "DATABASE_URL");
 
 test("BLOCK 1B DB ACCEPTANCE: INQUIRY CORE MATRIX", async (t) => {
   const client = new Client({ connectionString });
@@ -106,6 +123,16 @@ test("BLOCK 1B DB ACCEPTANCE: INQUIRY CORE MATRIX", async (t) => {
     assert.ok(seedData.rows.length > 0, "Seed data for published target must exist");
     const { person_id, person_seed_key, pub_id, provider_profile_id, channel_code } = seedData.rows[0];
 
+    const consentRes = await client.query(`
+      INSERT INTO privacy.consent_receipts (
+        id, receipt_key, person_id, purpose_code, policy_version, consent_action, grant_effective_from
+      ) VALUES (
+        gen_random_uuid(), 's1:test:consent:block1b_db', $1::uuid, 'INQUIRY', 'v1.0', 'GRANTED', NOW() - interval '1 day'
+      ) ON CONFLICT (receipt_key) DO UPDATE SET person_id = EXCLUDED.person_id, consent_action = 'GRANTED'
+      RETURNING id;
+    `, [person_id]);
+    const consentReceiptId = consentRes.rows[0].id;
+
     const runtimeClient = new Client({ connectionString: runtimeUrl });
     await runtimeClient.connect();
 
@@ -124,8 +151,8 @@ test("BLOCK 1B DB ACCEPTANCE: INQUIRY CORE MATRIX", async (t) => {
         SELECT engagement.submit_inquiry(
           p_target_id => $1::uuid,
           p_channel_code => $2,
-          p_consent_receipt_id => NULL,
-          p_idempotency_key => $3,
+          p_consent_receipt_id => $3::uuid,
+          p_idempotency_key => $4,
           p_requested_start_at => '2026-09-01T10:00:00Z'::timestamptz,
           p_requested_end_at => '2026-09-02T10:00:00Z'::timestamptz,
           p_location_text => 'Sanur, Bali',
@@ -135,7 +162,7 @@ test("BLOCK 1B DB ACCEPTANCE: INQUIRY CORE MATRIX", async (t) => {
           p_requirement_payload => '{"flexibility": "HIGH"}'::jsonb,
           p_commercial_ref => 'COMM_REF_123'
         ) as result;
-      `, [pub_id, channel_code, idempotencyKey]);
+      `, [pub_id, channel_code, consentReceiptId, idempotencyKey]);
 
       const inqResult = submitRes.rows[0].result;
       assert.ok(inqResult.id, "Submitted inquiry must return valid ID");
@@ -149,8 +176,8 @@ test("BLOCK 1B DB ACCEPTANCE: INQUIRY CORE MATRIX", async (t) => {
         SELECT engagement.submit_inquiry(
           p_target_id => $1::uuid,
           p_channel_code => $2,
-          p_consent_receipt_id => NULL,
-          p_idempotency_key => $3,
+          p_consent_receipt_id => $3::uuid,
+          p_idempotency_key => $4,
           p_requested_start_at => '2026-09-01T10:00:00Z'::timestamptz,
           p_requested_end_at => '2026-09-02T10:00:00Z'::timestamptz,
           p_location_text => 'Sanur, Bali',
@@ -160,7 +187,7 @@ test("BLOCK 1B DB ACCEPTANCE: INQUIRY CORE MATRIX", async (t) => {
           p_requirement_payload => '{"flexibility": "HIGH"}'::jsonb,
           p_commercial_ref => 'COMM_REF_123'
         ) as result;
-      `, [pub_id, channel_code, idempotencyKey]);
+      `, [pub_id, channel_code, consentReceiptId, idempotencyKey]);
       assert.strictEqual(retryRes.rows[0].result.id, inquiryId, "Idempotent re-submission must return same inquiry ID");
 
       // Consumer Read Inquiry
@@ -232,6 +259,83 @@ test("BLOCK 1B DB ACCEPTANCE: INQUIRY CORE MATRIX", async (t) => {
         "Activating a CLOSED inquiry must fail with STATE_CONFLICT"
       );
 
+    } finally {
+      await runtimeClient.end();
+    }
+  });
+
+  await t.test("NEGATIVE CONSENT PURPOSE: wrong-purpose consent receipt rejected with 22023 / VALIDATION_FAILED", async () => {
+    const seedData = await client.query(`
+      SELECT
+        cp.id as pub_id,
+        cp.provider_profile_id,
+        cp.channel_code,
+        p.id as person_id,
+        p.seed_key as person_seed_key
+      FROM listing.channel_publications cp
+      CROSS JOIN party.persons p
+      WHERE cp.publication_status = 'PUBLISHED'
+      LIMIT 1;
+    `);
+
+    const { person_id, person_seed_key, pub_id, channel_code } = seedData.rows[0];
+
+    // Insert active GRANTED consent receipt with wrong purpose 'PROFILE_PREFERENCE'
+    const wrongPurposeRes = await client.query(`
+      INSERT INTO privacy.consent_receipts (
+        id, receipt_key, person_id, purpose_code, policy_version, consent_action, grant_effective_from
+      ) VALUES (
+        gen_random_uuid(), 's1:test:consent:block1b_db_wrong_purpose', $1::uuid, 'PROFILE_PREFERENCE', 'v1.0', 'GRANTED', NOW() - interval '1 day'
+      ) ON CONFLICT (receipt_key) DO UPDATE SET person_id = EXCLUDED.person_id, consent_action = 'GRANTED'
+      RETURNING id;
+    `, [person_id]);
+    const wrongPurposeReceiptId = wrongPurposeRes.rows[0].id;
+
+    const runtimeClient = new Client({ connectionString: runtimeUrl });
+    await runtimeClient.connect();
+
+    try {
+      await runtimeClient.query(`
+        SELECT set_config('app.actor_person_id', '${person_id}', false);
+        SELECT set_config('app.actor_person_key', '${person_seed_key}', false);
+        SELECT set_config('app.actor_account_key', 'acc_test_consumer', false);
+        SELECT set_config('app.correlation_id', 'corr_block1b_neg_purpose_test', false);
+        SELECT set_config('app.request_id', 'req_block1b_neg_purpose_test', false);
+      `);
+
+      const countBeforeRes = await client.query(`SELECT count(*)::int as count FROM engagement.inquiries;`);
+      const countBefore = countBeforeRes.rows[0].count;
+
+      const idempotencyKey = `idemp_neg_purpose_${Date.now()}`;
+      await assert.rejects(
+        async () => {
+          await runtimeClient.query(`
+            SELECT engagement.submit_inquiry(
+              p_target_id => $1::uuid,
+              p_channel_code => $2,
+              p_consent_receipt_id => $3::uuid,
+              p_idempotency_key => $4,
+              p_requested_start_at => '2026-09-01T10:00:00Z'::timestamptz,
+              p_requested_end_at => '2026-09-02T10:00:00Z'::timestamptz,
+              p_location_text => 'Sanur, Bali',
+              p_geo_region_id => NULL,
+              p_quantity => 2,
+              p_consumer_note => 'Should be rejected due to wrong consent purpose',
+              p_requirement_payload => '{"flexibility": "HIGH"}'::jsonb,
+              p_commercial_ref => 'COMM_REF_WRONG_PURPOSE'
+            ) as result;
+          `, [pub_id, channel_code, wrongPurposeReceiptId, idempotencyKey]);
+        },
+        (err: any) => {
+          assert.strictEqual(err.code, "22023", "SQLSTATE must be 22023");
+          assert.ok(err.message.includes("VALIDATION_FAILED"), "Error message must contain VALIDATION_FAILED");
+          return true;
+        },
+        "Submit inquiry with wrong-purpose consent receipt must fail with 22023 VALIDATION_FAILED"
+      );
+
+      const countAfterRes = await client.query(`SELECT count(*)::int as count FROM engagement.inquiries;`);
+      assert.strictEqual(countAfterRes.rows[0].count, countBefore, "No inquiry row must be created from rejected submission");
     } finally {
       await runtimeClient.end();
     }

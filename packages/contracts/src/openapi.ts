@@ -501,10 +501,9 @@ export const openApiDocument = {
             "application/json": {
               schema: {
                 type: "object",
-                required: ["target_id"],
+                required: ["target_id", "consent_receipt_id"],
                 properties: {
                   target_id: { type: "string", format: "uuid" },
-                  channel_code: { type: "string", enum: ["VINDZAM", "VINDLOKA"] },
                   consent_receipt_id: { type: "string", format: "uuid" },
                   idempotency_key: { type: "string" },
                   requested_start_at: { type: "string", format: "date-time" },

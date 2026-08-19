@@ -251,6 +251,7 @@ describe("Stage 1 Block 1B — Inquiry Core API Suite", () => {
       },
       payload: {
         target_id: sampleTargetId,
+        consent_receipt_id: "66666666-6666-4000-a000-666666666666",
         requested_start_at: "2026-09-01T10:00:00Z",
         requested_end_at: "2026-09-02T10:00:00Z",
         location_text: "Sanur, Bali",
@@ -263,6 +264,42 @@ describe("Stage 1 Block 1B — Inquiry Core API Suite", () => {
     assert.strictEqual(json.data.id, sampleInquiryId);
     assert.strictEqual(json.data.status, "NEW");
     assert.strictEqual(json.data.source_channel, "VINDZAM");
+  });
+
+  it("2a. POST /api/v1/inquiries missing consent_receipt_id returns 400 VALIDATION_FAILED", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/inquiries",
+      headers: {
+        cookie: `vind_session=${validConsumerToken}`
+      },
+      payload: {
+        target_id: sampleTargetId,
+        requested_start_at: "2026-09-01T10:00:00Z"
+      }
+    });
+    assert.strictEqual(res.statusCode, 400);
+    const json = res.json();
+    assert.strictEqual(json.code, "VALIDATION_FAILED");
+  });
+
+  it("2b. POST /api/v1/inquiries channel body spoofing returns 400 VALIDATION_FAILED", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/inquiries",
+      headers: {
+        cookie: `vind_session=${validConsumerToken}`,
+        host: "vindzam.test"
+      },
+      payload: {
+        target_id: sampleTargetId,
+        channel_code: "VINDLOKA",
+        consent_receipt_id: "66666666-6666-4000-a000-666666666666"
+      }
+    });
+    assert.strictEqual(res.statusCode, 400);
+    const json = res.json();
+    assert.strictEqual(json.code, "VALIDATION_FAILED");
   });
 
   it("3. GET /api/v1/inquiries/:inquiryId reads consumer inquiry details (200)", async () => {

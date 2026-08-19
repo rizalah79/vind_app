@@ -27,7 +27,7 @@ class TestAcceptanceSessionStore implements SessionStore {
   }
 }
 
-describe("STAGE 1 BLOCK 1B — REAL POSTGRESQL API ACCEPTANCE SUITE", () => {
+describe("STAGE 1 BLOCK 1B — REAL POSTGRESQL API ACCEPTANCE SUITE", { skip: !process.env.ISOLATED_PORT ? "Isolated database port ISOLATED_PORT not configured" : false }, () => {
   const channelHostConfig = {
     vindzamAllowedHosts: ["vindzam.test", "localhost"],
     vindlokaAllowedHosts: ["vindloka.test"]
@@ -51,6 +51,12 @@ describe("STAGE 1 BLOCK 1B — REAL POSTGRESQL API ACCEPTANCE SUITE", () => {
 
   const consumerToken = "token_consumer_real_db_123";
   const sahabatToken = "token_sahabat_real_db_456";
+
+  let testConsentReceiptId = "77777777-7777-4000-a000-777777777777";
+  let otherConsentReceiptId = "88888888-8888-4000-a000-888888888888";
+  let wrongPurposeConsentReceiptId = "66666666-6666-4000-a000-666666666666";
+  let otherConsumerPersonId = "99999999-9999-4000-a000-999999999999";
+  let otherConsumerToken = "token_other_consumer_real_db_789";
 
   before(async () => {
     if (!process.env.ISOLATED_PORT) {
@@ -88,6 +94,41 @@ describe("STAGE 1 BLOCK 1B — REAL POSTGRESQL API ACCEPTANCE SUITE", () => {
     consumerPersonId = pub.consumer_person_id;
     consumerPersonSeedKey = pub.consumer_person_seed_key;
 
+    // Create active consent receipt for primary consumer
+    await pgOwnerClient.query(`
+      INSERT INTO privacy.consent_receipts (
+        id, receipt_key, person_id, purpose_code, policy_version, consent_action, grant_effective_from
+      ) VALUES (
+        $1::uuid, 's1:test:consent:real_db_api_primary', $2::uuid, 'INQUIRY', 'v1.0', 'GRANTED', NOW() - interval '1 day'
+      ) ON CONFLICT (receipt_key) DO UPDATE SET consent_action = 'GRANTED';
+    `, [testConsentReceiptId, consumerPersonId]);
+
+    // Create other consumer person & consent receipt
+    const otherPersonRes = await pgOwnerClient.query(`
+      INSERT INTO party.persons (id, seed_key, data_origin_code, is_synthetic, contactable, display_name)
+      VALUES ($1::uuid, 'person:test:other_consumer', 'REFERENCE', false, true, 'Other Consumer')
+      ON CONFLICT (seed_key) DO UPDATE SET display_name = 'Other Consumer'
+      RETURNING id, seed_key;
+    `, [otherConsumerPersonId]);
+    otherConsumerPersonId = otherPersonRes.rows[0].id;
+
+    await pgOwnerClient.query(`
+      INSERT INTO privacy.consent_receipts (
+        id, receipt_key, person_id, purpose_code, policy_version, consent_action, grant_effective_from
+      ) VALUES (
+        $1::uuid, 's1:test:consent:real_db_api_other', $2::uuid, 'INQUIRY', 'v1.0', 'GRANTED', NOW() - interval '1 day'
+      ) ON CONFLICT (receipt_key) DO UPDATE SET consent_action = 'GRANTED';
+    `, [otherConsentReceiptId, otherConsumerPersonId]);
+
+    // Create consent receipt with non-INQUIRY purpose (PROFILE_PREFERENCE) for primary consumer
+    await pgOwnerClient.query(`
+      INSERT INTO privacy.consent_receipts (
+        id, receipt_key, person_id, purpose_code, policy_version, consent_action, grant_effective_from
+      ) VALUES (
+        $1::uuid, 's1:test:consent:real_db_api_wrong_purpose', $2::uuid, 'PROFILE_PREFERENCE', 'v1.0', 'GRANTED', NOW() - interval '1 day'
+      ) ON CONFLICT (receipt_key) DO UPDATE SET consent_action = 'GRANTED';
+    `, [wrongPurposeConsentReceiptId, consumerPersonId]);
+
     // Query active Sahabat scoped assignment for provider profile
     const sahabatAssRes = await pgOwnerClient.query(`
       SELECT sa.seed_key, sa.subject_person_id, sa.role_code, sa.scope_type, p.seed_key as person_seed_key
@@ -109,6 +150,22 @@ describe("STAGE 1 BLOCK 1B — REAL POSTGRESQL API ACCEPTANCE SUITE", () => {
     sessionStore.addSession(consumerToken, {
       accountKey: "acc_real_consumer",
       personKey: consumerPersonSeedKey,
+      actorKind: "HUMAN",
+      authorityPlane: "RELATIONSHIP",
+      membershipKey: null,
+      localAssignmentKey: null,
+      platformAssignmentKey: null,
+      serviceGrantKey: null,
+      organizationKey: null,
+      workspaceKey: null,
+      providerKey: null,
+      regionKey: null,
+      absoluteExpiresAt: new Date(Date.now() + 3600 * 1000)
+    });
+
+    sessionStore.addSession(otherConsumerToken, {
+      accountKey: "acc_real_other_consumer",
+      personKey: "person:test:other_consumer",
       actorKind: "HUMAN",
       authorityPlane: "RELATIONSHIP",
       membershipKey: null,
@@ -153,6 +210,71 @@ describe("STAGE 1 BLOCK 1B — REAL POSTGRESQL API ACCEPTANCE SUITE", () => {
 
   let createdInquiryId: string;
 
+  it("1a. Consumer submit missing consent_receipt_id fails (400 VALIDATION_FAILED)", async () => {
+    if (!process.env.ISOLATED_PORT) return;
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/inquiries",
+      headers: { cookie: `vind_session=${consumerToken}` },
+      payload: { target_id: testPubId }
+    });
+    assert.strictEqual(res.statusCode, 400);
+    assert.strictEqual(res.json().code, "VALIDATION_FAILED");
+  });
+
+  it("1b. Consumer submit wrong-owner consent_receipt_id fails (400 VALIDATION_FAILED)", async () => {
+    if (!process.env.ISOLATED_PORT) return;
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/inquiries",
+      headers: { cookie: `vind_session=${consumerToken}` },
+      payload: {
+        target_id: testPubId,
+        consent_receipt_id: otherConsentReceiptId
+      }
+    });
+    assert.strictEqual(res.statusCode, 400);
+    assert.strictEqual(res.json().code, "VALIDATION_FAILED");
+  });
+
+  it("1c. Consumer submit channel body spoofing fails (400 VALIDATION_FAILED)", async () => {
+    if (!process.env.ISOLATED_PORT) return;
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/inquiries",
+      headers: {
+        cookie: `vind_session=${consumerToken}`,
+        host: "vindzam.test"
+      },
+      payload: {
+        target_id: testPubId,
+        channel_code: "VINDLOKA",
+        consent_receipt_id: testConsentReceiptId
+      }
+    });
+    assert.strictEqual(res.statusCode, 400);
+    assert.strictEqual(res.json().code, "VALIDATION_FAILED");
+  });
+
+  it("1d. Consumer submit wrong-purpose consent_receipt_id fails (400 VALIDATION_FAILED)", async () => {
+    if (!process.env.ISOLATED_PORT) return;
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/inquiries",
+      headers: { cookie: `vind_session=${consumerToken}` },
+      payload: {
+        target_id: testPubId,
+        consent_receipt_id: wrongPurposeConsentReceiptId
+      }
+    });
+    assert.strictEqual(res.statusCode, 400);
+    assert.strictEqual(res.json().code, "VALIDATION_FAILED");
+  });
+
   it("1. Consumer POST /api/v1/inquiries creates inquiry with Real DB", async () => {
     if (!process.env.ISOLATED_PORT) {
       return;
@@ -167,7 +289,7 @@ describe("STAGE 1 BLOCK 1B — REAL POSTGRESQL API ACCEPTANCE SUITE", () => {
       },
       payload: {
         target_id: testPubId,
-        channel_code: testChannelCode,
+        consent_receipt_id: testConsentReceiptId,
         requested_start_at: "2026-09-01T10:00:00Z",
         requested_end_at: "2026-09-02T10:00:00Z",
         location_text: "Sanur, Bali",
@@ -189,6 +311,53 @@ describe("STAGE 1 BLOCK 1B — REAL POSTGRESQL API ACCEPTANCE SUITE", () => {
     createdInquiryId = json.data.id;
   });
 
+  it("1d. Idempotency same key same payload returns 201 with identical response", async () => {
+    if (!process.env.ISOLATED_PORT) return;
+    const key = `idemp_same_payload_${Date.now()}`;
+
+    const res1 = await app.inject({
+      method: "POST",
+      url: "/api/v1/inquiries",
+      headers: { cookie: `vind_session=${consumerToken}`, "idempotency-key": key },
+      payload: { target_id: testPubId, consent_receipt_id: testConsentReceiptId, quantity: 5 }
+    });
+    assert.strictEqual(res1.statusCode, 201);
+    const json1 = res1.json();
+
+    const res2 = await app.inject({
+      method: "POST",
+      url: "/api/v1/inquiries",
+      headers: { cookie: `vind_session=${consumerToken}`, "idempotency-key": key },
+      payload: { target_id: testPubId, consent_receipt_id: testConsentReceiptId, quantity: 5 }
+    });
+    assert.strictEqual(res2.statusCode, 201);
+    const json2 = res2.json();
+
+    assert.strictEqual(json1.data.id, json2.data.id);
+  });
+
+  it("1e. Idempotency same key changed payload returns 409 STATE_CONFLICT", async () => {
+    if (!process.env.ISOLATED_PORT) return;
+    const key = `idemp_changed_payload_${Date.now()}`;
+
+    const res1 = await app.inject({
+      method: "POST",
+      url: "/api/v1/inquiries",
+      headers: { cookie: `vind_session=${consumerToken}`, "idempotency-key": key },
+      payload: { target_id: testPubId, consent_receipt_id: testConsentReceiptId, quantity: 3 }
+    });
+    assert.strictEqual(res1.statusCode, 201);
+
+    const res2 = await app.inject({
+      method: "POST",
+      url: "/api/v1/inquiries",
+      headers: { cookie: `vind_session=${consumerToken}`, "idempotency-key": key },
+      payload: { target_id: testPubId, consent_receipt_id: testConsentReceiptId, quantity: 99 }
+    });
+    assert.strictEqual(res2.statusCode, 409);
+    assert.strictEqual(res2.json().code, "STATE_CONFLICT");
+  });
+
   it("2. Consumer GET /api/v1/inquiries/:inquiryId reads details with Real DB", async () => {
     if (!process.env.ISOLATED_PORT) {
       return;
@@ -206,6 +375,18 @@ describe("STAGE 1 BLOCK 1B — REAL POSTGRESQL API ACCEPTANCE SUITE", () => {
     const json = res.json();
     assert.strictEqual(json.data.id, createdInquiryId);
     assert.strictEqual(json.data.requirement.consumer_note, "Real DB API Test Inquiry");
+  });
+
+  it("2a. Other consumer reading another consumer's inquiry returns 404/CAPABILITY_DENIED via RLS", async () => {
+    if (!process.env.ISOLATED_PORT) return;
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/inquiries/${createdInquiryId}`,
+      headers: { cookie: `vind_session=${otherConsumerToken}` }
+    });
+
+    assert.ok(res.statusCode === 404 || res.statusCode === 403, `Expected 404/403 but got ${res.statusCode}`);
   });
 
   it("3. Sahabat GET /api/v1/sahabat/inquiries lists provider inquiries with Real DB", async () => {
@@ -244,6 +425,20 @@ describe("STAGE 1 BLOCK 1B — REAL POSTGRESQL API ACCEPTANCE SUITE", () => {
     assert.strictEqual(res.statusCode, 200);
     const json = res.json();
     assert.strictEqual(json.data.status, "ACTIVE");
+  });
+
+  it("5a. Sahabat assign arbitrary non-scoped person fails (400 VALIDATION_FAILED)", async () => {
+    if (!process.env.ISOLATED_PORT) return;
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/sahabat/inquiries/${createdInquiryId}/assign`,
+      headers: { cookie: `vind_session=${sahabatToken}` },
+      payload: { assigned_person_id: otherConsumerPersonId }
+    });
+
+    assert.strictEqual(res.statusCode, 400);
+    assert.strictEqual(res.json().code, "VALIDATION_FAILED");
   });
 
   it("5. Sahabat POST /api/v1/sahabat/inquiries/:inquiryId/assign assigns inquiry with Real DB", async () => {
@@ -286,5 +481,44 @@ describe("STAGE 1 BLOCK 1B — REAL POSTGRESQL API ACCEPTANCE SUITE", () => {
     assert.strictEqual(res.statusCode, 200);
     const json = res.json();
     assert.strictEqual(json.data.status, "CLOSED");
+  });
+
+  it("7. SECURITY: FORCE RLS and NOBYPASSRLS verification", async () => {
+    if (!process.env.ISOLATED_PORT) return;
+
+    const rlsRes = await pgOwnerClient.query(`
+      SELECT relname, relrowsecurity, relforcerowsecurity
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'engagement'
+        AND relname IN ('inquiries', 'inquiry_requirements', 'inquiry_participants', 'inquiry_assignments');
+    `);
+
+    assert.strictEqual(rlsRes.rows.length, 4);
+    for (const r of rlsRes.rows) {
+      assert.strictEqual(r.relrowsecurity, true, `Table ${r.relname} must have ROW LEVEL SECURITY = true`);
+      assert.strictEqual(r.relforcerowsecurity, true, `Table ${r.relname} must have FORCE ROW LEVEL SECURITY = true`);
+    }
+
+    const bypassRes = await pgOwnerClient.query(`
+      SELECT rolname, rolbypassrls FROM pg_roles WHERE rolname IN ('vind_db_owner', 'vind_migrator', 'vind_app_runtime');
+    `);
+
+    for (const r of bypassRes.rows) {
+      assert.strictEqual(r.rolbypassrls, false, `Role ${r.rolname} must have NOBYPASSRLS`);
+    }
+  });
+
+  after(async () => {
+    if (!process.env.ISOLATED_PORT) return;
+    if (prismaClient) {
+      await prismaClient.$disconnect().catch(() => {});
+    }
+    if (pgOwnerClient) {
+      await pgOwnerClient.end().catch(() => {});
+    }
+    if (app) {
+      await app.close().catch(() => {});
+    }
   });
 });

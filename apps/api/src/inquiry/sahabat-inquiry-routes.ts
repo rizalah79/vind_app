@@ -91,7 +91,7 @@ export function registerSahabatInquiryRoutes(
           }
         });
       } catch (err) {
-        handleInquiryRpcError(err);
+        handleInquiryRpcError(err, request);
       }
     }
   );
@@ -121,7 +121,7 @@ export function registerSahabatInquiryRoutes(
           }
         });
       } catch (err) {
-        handleInquiryRpcError(err);
+        handleInquiryRpcError(err, request);
       }
     }
   );
@@ -151,7 +151,7 @@ export function registerSahabatInquiryRoutes(
           }
         });
       } catch (err) {
-        handleInquiryRpcError(err);
+        handleInquiryRpcError(err, request);
       }
     }
   );
@@ -200,7 +200,7 @@ export function registerSahabatInquiryRoutes(
           }
         });
       } catch (err) {
-        handleInquiryRpcError(err);
+        handleInquiryRpcError(err, request);
       }
     }
   );
@@ -235,7 +235,7 @@ export function registerSahabatInquiryRoutes(
           }
         });
       } catch (err) {
-        handleInquiryRpcError(err);
+        handleInquiryRpcError(err, request);
       }
     }
   );
