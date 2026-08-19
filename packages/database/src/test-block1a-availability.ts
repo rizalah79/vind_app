@@ -7,7 +7,7 @@ dotenv.config({ path: "packages/database/.env.isolated" });
 
 const port = Number(process.env.ISOLATED_PORT || 55433);
 const host = "127.0.0.1";
-const database = "vind_app_dev";
+const database = process.env.ISOLATED_DB_NAME || "vind_app_dev";
 const runtimeUser = "vind_app_runtime";
 const runtimePassword = process.env.ISOLATED_RUNTIME_PASSWORD || "f1bfce720440462356e611e7b13fbb615204bb9353651b53c361f77f1097f0ad";
 

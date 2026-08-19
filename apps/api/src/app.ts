@@ -35,6 +35,8 @@ import { createLocalMediaDeliveryAdapter, type MediaDeliveryAdapter } from "./me
 
 import { registerConsumerInquiryRoutes } from "./inquiry/consumer-inquiry-routes.js";
 import { registerSahabatInquiryRoutes } from "./inquiry/sahabat-inquiry-routes.js";
+import { registerConsumerMessagingRoutes } from "./messaging/consumer-messaging-routes.js";
+import { registerSahabatMessagingRoutes } from "./messaging/sahabat-messaging-routes.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -195,6 +197,16 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
       channelHostConfig: options.channelHostConfig
     });
     registerSahabatInquiryRoutes(app, {
+      dbClient: options.domainDbClient,
+      sessionStore: options.sessionStore,
+      channelHostConfig: options.channelHostConfig
+    });
+    registerConsumerMessagingRoutes(app, {
+      dbClient: options.domainDbClient,
+      sessionStore: options.sessionStore,
+      channelHostConfig: options.channelHostConfig
+    });
+    registerSahabatMessagingRoutes(app, {
       dbClient: options.domainDbClient,
       sessionStore: options.sessionStore,
       channelHostConfig: options.channelHostConfig

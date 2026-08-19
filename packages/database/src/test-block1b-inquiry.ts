@@ -25,6 +25,7 @@ assertIsolatedAcceptanceDb(runtimeUrl, "DATABASE_URL");
 test("BLOCK 1B DB ACCEPTANCE: INQUIRY CORE MATRIX", async (t) => {
   const client = new Client({ connectionString });
   await client.connect();
+  await client.query("SET ROLE vind_db_owner;");
 
   await t.test("STRUCTURAL: Schema engagement tables, RLS=true, FORCE RLS=true, NOBYPASSRLS", async () => {
     const res = await client.query(`
