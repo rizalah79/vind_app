@@ -54,6 +54,7 @@ describe("STAGE 1 BLOCK 1B — REAL POSTGRESQL API ACCEPTANCE SUITE", { skip: !p
 
   let testConsentReceiptId = "77777777-7777-4000-a000-777777777777";
   let otherConsentReceiptId = "88888888-8888-4000-a000-888888888888";
+  let wrongPurposeConsentReceiptId = "66666666-6666-4000-a000-666666666666";
   let otherConsumerPersonId = "99999999-9999-4000-a000-999999999999";
   let otherConsumerToken = "token_other_consumer_real_db_789";
 
@@ -118,6 +119,15 @@ describe("STAGE 1 BLOCK 1B — REAL POSTGRESQL API ACCEPTANCE SUITE", { skip: !p
         $1::uuid, 's1:test:consent:real_db_api_other', $2::uuid, 'INQUIRY', 'v1.0', 'GRANTED', NOW() - interval '1 day'
       ) ON CONFLICT (receipt_key) DO UPDATE SET consent_action = 'GRANTED';
     `, [otherConsentReceiptId, otherConsumerPersonId]);
+
+    // Create consent receipt with non-INQUIRY purpose (PROFILE_PREFERENCE) for primary consumer
+    await pgOwnerClient.query(`
+      INSERT INTO privacy.consent_receipts (
+        id, receipt_key, person_id, purpose_code, policy_version, consent_action, grant_effective_from
+      ) VALUES (
+        $1::uuid, 's1:test:consent:real_db_api_wrong_purpose', $2::uuid, 'PROFILE_PREFERENCE', 'v1.0', 'GRANTED', NOW() - interval '1 day'
+      ) ON CONFLICT (receipt_key) DO UPDATE SET consent_action = 'GRANTED';
+    `, [wrongPurposeConsentReceiptId, consumerPersonId]);
 
     // Query active Sahabat scoped assignment for provider profile
     const sahabatAssRes = await pgOwnerClient.query(`
@@ -243,6 +253,22 @@ describe("STAGE 1 BLOCK 1B — REAL POSTGRESQL API ACCEPTANCE SUITE", { skip: !p
         target_id: testPubId,
         channel_code: "VINDLOKA",
         consent_receipt_id: testConsentReceiptId
+      }
+    });
+    assert.strictEqual(res.statusCode, 400);
+    assert.strictEqual(res.json().code, "VALIDATION_FAILED");
+  });
+
+  it("1d. Consumer submit wrong-purpose consent_receipt_id fails (400 VALIDATION_FAILED)", async () => {
+    if (!process.env.ISOLATED_PORT) return;
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/inquiries",
+      headers: { cookie: `vind_session=${consumerToken}` },
+      payload: {
+        target_id: testPubId,
+        consent_receipt_id: wrongPurposeConsentReceiptId
       }
     });
     assert.strictEqual(res.statusCode, 400);

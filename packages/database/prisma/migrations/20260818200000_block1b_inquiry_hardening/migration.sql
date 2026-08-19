@@ -49,6 +49,7 @@ BEGIN
         SELECT 1 FROM privacy.consent_receipts cr
         WHERE cr.id = p_consent_receipt_id
           AND cr.person_id = v_actor_person_id
+          AND cr.purpose_code = 'INQUIRY'
           AND cr.consent_action = 'GRANTED'
           AND (cr.grant_effective_from IS NULL OR cr.grant_effective_from <= v_at)
           AND (cr.grant_effective_until IS NULL OR cr.grant_effective_until > v_at)
