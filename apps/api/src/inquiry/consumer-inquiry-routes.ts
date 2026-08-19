@@ -6,8 +6,15 @@ import { resolveCanonicalChannel, type ChannelHostConfig } from "../auth/channel
 import { runWithRequestContextV2, type RequestContextV2Params } from "../auth/request-context-v2.js";
 import { validateUuid } from "../catalog/validation.js";
 
-export function handleInquiryRpcError(error: unknown): never {
-  console.error("RAW INQUIRY ERROR:", error);
+export function handleInquiryRpcError(error: unknown, request?: FastifyRequest): never {
+  if (request?.log) {
+    request.log.error({
+      requestId: request.vindRequestId,
+      errorClass: error instanceof Error ? error.constructor.name : typeof error,
+      errorCode: (error as any)?.code
+    }, "Inquiry RPC operation failed");
+  }
+
   if (error instanceof Error) {
     const msg = error.message;
     if (msg.includes("AUTHENTICATION_REQUIRED")) {
@@ -128,11 +135,32 @@ export function registerConsumerInquiryRoutes(
         commercial_ref
       } = request.body || {};
 
+      if (!target_id) {
+        throw new HttpProblemError({
+          code: "VALIDATION_FAILED",
+          detail: "target_id is required."
+        });
+      }
+
+      if (!consent_receipt_id) {
+        throw new HttpProblemError({
+          code: "VALIDATION_FAILED",
+          detail: "consent_receipt_id is required."
+        });
+      }
+
+      if (channel_code && channel_code !== contextParams.channelCode) {
+        throw new HttpProblemError({
+          code: "VALIDATION_FAILED",
+          detail: `Channel code '${channel_code}' in body does not match trusted host channel '${contextParams.channelCode}'.`
+        });
+      }
+
       const targetId = validateUuid(target_id, "target_id");
-      const effectiveChannelCode = channel_code || contextParams.channelCode;
+      const effectiveChannelCode = contextParams.channelCode;
       const effectiveIdempotencyKey = headerIdempotencyKey || idempotency_key || null;
 
-      const consentReceiptId = consent_receipt_id ? validateUuid(consent_receipt_id, "consent_receipt_id") : null;
+      const consentReceiptId = validateUuid(consent_receipt_id, "consent_receipt_id");
       const geoRegionId = geo_region_id ? validateUuid(geo_region_id, "geo_region_id") : null;
 
       const reqStartAt = requested_start_at ? new Date(requested_start_at) : null;
@@ -188,7 +216,7 @@ export function registerConsumerInquiryRoutes(
           }
         });
       } catch (err: any) {
-        handleInquiryRpcError(err);
+        handleInquiryRpcError(err, request);
       }
     }
   );
@@ -218,7 +246,7 @@ export function registerConsumerInquiryRoutes(
           }
         });
       } catch (err) {
-        handleInquiryRpcError(err);
+        handleInquiryRpcError(err, request);
       }
     }
   );
@@ -253,7 +281,7 @@ export function registerConsumerInquiryRoutes(
           }
         });
       } catch (err) {
-        handleInquiryRpcError(err);
+        handleInquiryRpcError(err, request);
       }
     }
   );
@@ -288,7 +316,7 @@ export function registerConsumerInquiryRoutes(
           }
         });
       } catch (err) {
-        handleInquiryRpcError(err);
+        handleInquiryRpcError(err, request);
       }
     }
   );

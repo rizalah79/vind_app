@@ -2,8 +2,25 @@ import assert from "node:assert";
 import { test } from "node:test";
 import { Client } from "pg";
 
-const connectionString = process.env.DATABASE_MIGRATION_URL || "postgresql://vind_db_owner:vind_db_owner_pass@localhost:5432/vind_app_dev?schema=public";
-const runtimeUrl = process.env.DATABASE_URL || "postgresql://vind_app_runtime:f1bfce720440462356e611e7b13fbb615204bb9353651b53c361f77f1097f0ad@localhost:5432/vind_app_dev?schema=public";
+const connectionString = process.env.DATABASE_MIGRATION_URL;
+const runtimeUrl = process.env.DATABASE_URL;
+
+if (!connectionString || !runtimeUrl) {
+  throw new Error("DATABASE_MIGRATION_URL and DATABASE_URL environment variables are strictly required for Block 1B DB Acceptance Test.");
+}
+
+function assertIsolatedAcceptanceDb(urlStr: string, label: string) {
+  const parsed = new URL(urlStr);
+  const port = parsed.port || "5432";
+  const dbName = parsed.pathname.replace(/^\//, "");
+
+  if (port === "5432" || dbName === "vind_app_dev") {
+    throw new Error(`SECURITY INCIDENT PREVENTION: ${label} must target an isolated acceptance database on a non-5432 port and non-dev database. Received port=${port}, db=${dbName}`);
+  }
+}
+
+assertIsolatedAcceptanceDb(connectionString, "DATABASE_MIGRATION_URL");
+assertIsolatedAcceptanceDb(runtimeUrl, "DATABASE_URL");
 
 test("BLOCK 1B DB ACCEPTANCE: INQUIRY CORE MATRIX", async (t) => {
   const client = new Client({ connectionString });
@@ -106,6 +123,16 @@ test("BLOCK 1B DB ACCEPTANCE: INQUIRY CORE MATRIX", async (t) => {
     assert.ok(seedData.rows.length > 0, "Seed data for published target must exist");
     const { person_id, person_seed_key, pub_id, provider_profile_id, channel_code } = seedData.rows[0];
 
+    const consentRes = await client.query(`
+      INSERT INTO privacy.consent_receipts (
+        id, receipt_key, person_id, purpose_code, policy_version, consent_action, grant_effective_from
+      ) VALUES (
+        gen_random_uuid(), 's1:test:consent:block1b_db', $1::uuid, 'INQUIRY', 'v1.0', 'GRANTED', NOW() - interval '1 day'
+      ) ON CONFLICT (receipt_key) DO UPDATE SET person_id = EXCLUDED.person_id, consent_action = 'GRANTED'
+      RETURNING id;
+    `, [person_id]);
+    const consentReceiptId = consentRes.rows[0].id;
+
     const runtimeClient = new Client({ connectionString: runtimeUrl });
     await runtimeClient.connect();
 
@@ -124,8 +151,8 @@ test("BLOCK 1B DB ACCEPTANCE: INQUIRY CORE MATRIX", async (t) => {
         SELECT engagement.submit_inquiry(
           p_target_id => $1::uuid,
           p_channel_code => $2,
-          p_consent_receipt_id => NULL,
-          p_idempotency_key => $3,
+          p_consent_receipt_id => $3::uuid,
+          p_idempotency_key => $4,
           p_requested_start_at => '2026-09-01T10:00:00Z'::timestamptz,
           p_requested_end_at => '2026-09-02T10:00:00Z'::timestamptz,
           p_location_text => 'Sanur, Bali',
@@ -135,7 +162,7 @@ test("BLOCK 1B DB ACCEPTANCE: INQUIRY CORE MATRIX", async (t) => {
           p_requirement_payload => '{"flexibility": "HIGH"}'::jsonb,
           p_commercial_ref => 'COMM_REF_123'
         ) as result;
-      `, [pub_id, channel_code, idempotencyKey]);
+      `, [pub_id, channel_code, consentReceiptId, idempotencyKey]);
 
       const inqResult = submitRes.rows[0].result;
       assert.ok(inqResult.id, "Submitted inquiry must return valid ID");
@@ -149,8 +176,8 @@ test("BLOCK 1B DB ACCEPTANCE: INQUIRY CORE MATRIX", async (t) => {
         SELECT engagement.submit_inquiry(
           p_target_id => $1::uuid,
           p_channel_code => $2,
-          p_consent_receipt_id => NULL,
-          p_idempotency_key => $3,
+          p_consent_receipt_id => $3::uuid,
+          p_idempotency_key => $4,
           p_requested_start_at => '2026-09-01T10:00:00Z'::timestamptz,
           p_requested_end_at => '2026-09-02T10:00:00Z'::timestamptz,
           p_location_text => 'Sanur, Bali',
@@ -160,7 +187,7 @@ test("BLOCK 1B DB ACCEPTANCE: INQUIRY CORE MATRIX", async (t) => {
           p_requirement_payload => '{"flexibility": "HIGH"}'::jsonb,
           p_commercial_ref => 'COMM_REF_123'
         ) as result;
-      `, [pub_id, channel_code, idempotencyKey]);
+      `, [pub_id, channel_code, consentReceiptId, idempotencyKey]);
       assert.strictEqual(retryRes.rows[0].result.id, inquiryId, "Idempotent re-submission must return same inquiry ID");
 
       // Consumer Read Inquiry
